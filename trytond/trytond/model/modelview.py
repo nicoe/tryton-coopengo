@@ -2,8 +2,8 @@
 # this repository contains the full copyright notices and license terms.
 from lxml import etree
 from functools import wraps
-import copy
 import collections
+import datetime
 
 from trytond.exceptions import UserError
 from trytond.i18n import gettext
@@ -12,8 +12,11 @@ from trytond.tools import ClassProperty, is_instance_method
 from trytond.pyson import PYSONDecoder, PYSONEncoder
 from trytond.transaction import Transaction
 from trytond.cache import Cache
+from trytond.config import config
 from trytond.pool import Pool
 from trytond.rpc import RPC
+from trytond.server_context import ServerContext
+from trytond.config import config
 
 from .fields import on_change_result
 
@@ -220,6 +223,14 @@ class ModelView(Model):
                 cls.__change_buttons[button] |= getattr(
                     parent_meth, 'change', set())
 
+        for method_name, rpc in cls.__rpc__.items():
+            if not rpc.cache:
+                continue
+            cache_name = 'rpc.%s.%s' % (cls.__name__, method_name)
+            cache_duration = config.getint('cache', cache_name, default=None)
+            if cache_duration is not None:
+                rpc.cache.duration = datetime.timedelta(seconds=cache_duration)
+
     @classmethod
     def fields_view_get(cls, view_id=None, view_type='form', level=None):
         '''
@@ -300,7 +311,11 @@ class ModelView(Model):
                     ModelView._reset_modules_list()
                     raise_p = True
             parser = etree.XMLParser(remove_comments=True)
-            tree = etree.fromstring(result['arch'], parser=parser)
+            try:
+                encoded_arch = result['arch'].encode('utf-8')
+            except UnicodeEncodeError:
+                encoded_arch = result['arch']
+            tree = etree.fromstring(encoded_arch, parser=parser)
             for view in views:
                 if view.domain:
                     if not PYSONDecoder({'context': Transaction().context}
@@ -350,13 +365,38 @@ class ModelView(Model):
 
         # Update arch and compute fields from arch
         parser = etree.XMLParser(remove_blank_text=True)
-        tree = etree.fromstring(result['arch'], parser)
+        try:
+            encoded_arch = result['arch'].encode('utf-8')
+        except UnicodeEncodeError:
+            encoded_arch = result['arch']
+        tree = etree.fromstring(encoded_arch, parser)
         xarch, xfields = cls._view_look_dom_arch(
             tree, result['type'], result['field_childs'], level=level)
         result['arch'] = xarch
         result['fields'] = xfields
 
-        cls._fields_view_get_cache.set(key, result)
+        if result['field_childs']:
+            child_field = result['field_childs']
+            result['children_definitions'] = defs = {}
+            model = cls
+            requisite_fields = list(result['fields'].keys())
+            requisite_fields.remove(child_field)
+            while model and model.__name__ not in defs:
+                fields_to_get = [rfield for rfield in requisite_fields
+                    if hasattr(model, rfield)]
+                defs[model.__name__] = model.fields_get(fields_to_get
+                    + [child_field])
+                field = getattr(model, child_field, None)
+                if field:
+                    model = pool.get(field.model_name)
+                else:
+                    model = None
+        else:
+            result['children_definitions'] = {}
+
+        if not config.getboolean('cache', 'disable_fields_view_get_cache',
+                default=False):
+            cls._fields_view_get_cache.set(key, result)
         return result
 
     @classmethod
@@ -379,6 +419,7 @@ class ModelView(Model):
         prints = Action.get_keyword('form_print', (cls.__name__, -1))
         actions = Action.get_keyword('form_action', (cls.__name__, -1))
         relates = Action.get_keyword('form_relate', (cls.__name__, -1))
+        quick_actions = Action.get_keyword('form_toolbar', (cls.__name__, -1))
         exports = Export.search_read(
             [('resource', '=', cls.__name__)],
             fields_names=['name', 'export_fields.name'])
@@ -386,6 +427,7 @@ class ModelView(Model):
             'print': prints,
             'action': actions,
             'relate': relates,
+            'quick_actions': quick_actions,
             'exports': exports,
             }
         cls._view_toolbar_get_cache.set(key, result)
@@ -493,21 +535,17 @@ class ModelView(Model):
                 if hasattr(field, 'field'):
                     fields_def.setdefault(field.field, {'name': field.field})
 
-        for depend in view_depends:
-            if depend not in fields_to_remove:
-                fields_def.setdefault(depend, {'name': depend})
-
-        field_names = list(fields_def.keys())
-        while field_names:
-            field_name = field_names.pop()
+        for field_name in list(fields_def.keys()):
             if field_name in cls._fields:
                 field = cls._fields[field_name]
             else:
                 continue
             for depend in field.depends:
-                if depend not in fields_def:
-                    fields_def[depend] = {'name': depend}
-                    field_names.append(depend)
+                fields_def.setdefault(depend, {'name': depend})
+
+        for depend in view_depends:
+            if depend not in fields_to_remove:
+                fields_def.setdefault(depend, {'name': depend})
 
         arch = etree.tostring(
             tree, encoding='utf-8', pretty_print=False).decode('utf-8')
@@ -523,7 +561,7 @@ class ModelView(Model):
 
     @classmethod
     def __view_look_dom(cls, element, type, fields_width=None,
-            fields_attrs=None):
+            _fields_attrs=None):
         pool = Pool()
         Translation = pool.get('ir.translation')
         ModelData = pool.get('ir.model.data')
@@ -534,10 +572,10 @@ class ModelView(Model):
 
         if fields_width is None:
             fields_width = {}
-        if not fields_attrs:
+        if _fields_attrs is None:
             fields_attrs = {}
         else:
-            fields_attrs = copy.deepcopy(fields_attrs)
+            fields_attrs = _fields_attrs
 
         def set_view_ids(element):
             view_ids = []
@@ -586,8 +624,14 @@ class ModelView(Model):
                 view_ids = set_view_ids(element)
                 if type != 'form':
                     continue
+                # Coog Spec : Ignore fields which are not in the view, to allow
+                # dynamic sub_fields for Dict fields
+                if fname not in cls._fields:
+                    continue
                 field = cls._fields[fname]
                 relation = get_relation(field)
+                if element.get('relation'):
+                    relation = element.get('relation')
                 if not relation:
                     continue
                 mode = (
@@ -595,7 +639,8 @@ class ModelView(Model):
                 widget = element.attrib.get('widget', field._type)
                 views = get_views(relation, widget, view_ids, mode)
                 element.attrib['mode'] = ','.join(mode)
-                fields_attrs[fname].setdefault('views', {}).update(views)
+                if not element.get('relation'):
+                    fields_attrs[fname].setdefault('views', {}).update(views)
 
             if type == 'tree' and element.get('name') in fields_width:
                 element.set('width', str(fields_width[element.get('name')]))
@@ -680,7 +725,7 @@ class ModelView(Model):
 
         for field in element:
             fields_attrs = cls.__view_look_dom(field, type,
-                fields_width=fields_width, fields_attrs=fields_attrs)
+                fields_width=fields_width, _fields_attrs=fields_attrs)
         return fields_attrs
 
     @staticmethod
@@ -797,6 +842,7 @@ class ModelView(Model):
         init_values = self._init_values or {}
         if not self._values:
             return changed
+        init_record = self.__class__(self.id)
         for fname, value in self._values.items():
             field = self._fields[fname]
             # Always test key presence in case value is None
@@ -807,9 +853,12 @@ class ModelView(Model):
             if field._type in ('many2one', 'one2one', 'reference'):
                 if value:
                     if isinstance(value, ModelStorage):
-                        changed['%s.' % fname] = {
-                            'rec_name': value.rec_name,
-                            }
+                        try:
+                            changed['%s.' % fname] = {
+                                'rec_name': value.rec_name,
+                                }
+                        except AttributeError:
+                            pass
                     if value.id is None:
                         # Don't consider temporary instance as a change
                         continue
@@ -819,8 +868,10 @@ class ModelView(Model):
                         value = value.id
             elif field._type in ['one2many', 'many2many']:
                 targets = value
-                init_targets = list(init_values.get(
-                        fname, targets if field._type == 'one2many' else []))
+                if fname in init_values:
+                    init_targets = init_values.get(fname)
+                else:
+                    init_targets = getattr(init_record, fname, [])
                 value = collections.defaultdict(list)
                 previous = [t.id for t in init_targets if t.id]
                 for i, target in enumerate(targets):
@@ -841,19 +892,24 @@ class ModelView(Model):
                                     target_changed['id'] = target.id
                                     value['update'].append(target_changed)
                         else:
-                            if isinstance(target, ModelView):
-                                # Ensure initial values are returned because
-                                # target was instantiated on server side.
-                                target_init_values = target._init_values
-                                target._init_values = None
-                                try:
-                                    added_values = target._changed_values
-                                finally:
-                                    target._init_values = target_init_values
-                            else:
-                                added_values = target._default_values
-                            added_values['id'] = target.id
-                            value['add'].append((i, added_values))
+                            # JACK: redmine issue #5873
+                            # automatically get a one2Many rec_name
+                            # to limit number of requests
+                            with ServerContext().set_context(
+                                    _default_rec_names=True):
+                                if isinstance(target, ModelView):
+                                    # Ensure initial values are returned because
+                                    # target was instantiated on server side.
+                                    target_init_values = target._init_values
+                                    target._init_values = None
+                                    try:
+                                        added_values = target._changed_values
+                                    finally:
+                                        target._init_values = target_init_values
+                                else:
+                                    added_values = target._default_values
+                                added_values['id'] = target.id
+                                value['add'].append((i, added_values))
                     finally:
                         if t_values:
                             target._values = t_values

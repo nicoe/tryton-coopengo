@@ -1,20 +1,5 @@
-Version 5.6.6 - 2021-05-15
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.5 - 2021-03-03
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.4 - 2021-02-01
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.3 - 2021-01-01
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.2 - 2020-10-18
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.1 - 2020-08-02
-* Bug fixes (see mercurial logs for details)
+* BUG#PJAZZ-709 Fix move cancellation wizard 
+* Warn when cancelling a move related to an invoice
 
 Version 5.6.0 - 2020-05-04
 * Bug fixes (see mercurial logs for details)
@@ -55,6 +40,15 @@ Version 4.8.0 - 2018-04-23
 * Add invoice usage to party's contact mechanisms
 * Show reconciled date on invoice
 * Make description on invoice line optional
+
+Version 4.6.3 - 2018-04-03
+* Bug fixes (see mercurial logs for details)
+
+Version 4.6.2 - 2018-03-01
+* Bug fixes (see mercurial logs for details)
+
+Version 4.6.1 - 2018-01-04
+* Bug fixes (see mercurial logs for details)
 
 Version 4.6.0 - 2017-10-30
 * Bug fixes (see mercurial logs for details)

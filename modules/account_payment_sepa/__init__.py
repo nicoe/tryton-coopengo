@@ -21,3 +21,6 @@ def register():
     Pool.register(
         payment.MandateReport,
         module='account_payment_sepa', type_='report')
+    Pool.register(
+        party.Replace,
+        module='account_payment_sepa', type_='wizard')

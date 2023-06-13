@@ -77,6 +77,7 @@ class DictSchemaMixin(object):
         super(DictSchemaMixin, cls).__setup__()
         cls.__rpc__.update({
                 'get_keys': RPC(instantiate=0),
+                'search_get_keys': RPC(cache=dict(days=1)),
                 })
 
     @staticmethod
@@ -157,8 +158,17 @@ class DictSchemaMixin(object):
                 new_key['sort'] = record.selection_sorted
             elif record.type_ in ('float', 'numeric'):
                 new_key['digits'] = (16, record.digits)
+            # ABDC Inject sequence order in dict schema to allow client sorting
+            # properly using this custom sequence instead of extra data key
+            if hasattr(record, 'sequence_order'):
+                new_key['sequence_order'] = record.sequence_order
             keys.append(new_key)
         return keys
+
+    @classmethod
+    def search_get_keys(cls, domain, limit=None):
+        schemas = cls.search(domain, limit=limit)
+        return cls.get_keys(schemas)
 
     @classmethod
     def get_relation_fields(cls):

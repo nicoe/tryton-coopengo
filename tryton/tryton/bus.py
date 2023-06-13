@@ -82,7 +82,8 @@ def _listen(connection):
         if connection.session != session:
             break
 
-        data = json.loads(response.read(), object_hook=object_hook)
+        data = json.loads(response.read().decode('utf8'),
+            object_hook=object_hook)
         if data['message']:
             last_message = data['message']['message_id']
             GLib.idle_add(handle, data['message'])

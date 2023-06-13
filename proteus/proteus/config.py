@@ -67,6 +67,20 @@ def dump_struct(self, value, write, escape=xmlrpc.client.escape):
 xmlrpc.client.Marshaller.dispatch[dict] = dump_struct
 
 
+def dump_struct(self, value, write, escape=xmlrpc.client.escape):
+    converted_value = {}
+    for k, v in value.items():
+        if isinstance(k, int):
+            k = str(k)
+        elif isinstance(k, float):
+            k = repr(k)
+        converted_value[k] = v
+    return self.dump_struct(converted_value, write, escape=escape)
+
+
+xmlrpc.client.Marshaller.dispatch[dict] = dump_struct
+
+
 class XMLRPCDecoder(object):
 
     decoders = {}

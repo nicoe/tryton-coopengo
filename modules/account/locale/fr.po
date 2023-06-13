@@ -70,6 +70,10 @@ msgctxt "field:account.account,left:"
 msgid "Left"
 msgstr "Gauche"
 
+msgctxt "field:account.account,line_count:"
+msgid "Line Count"
+msgstr "Nombre de lignes"
+
 msgctxt "field:account.account,name:"
 msgid "Name"
 msgstr "Nom"
@@ -166,6 +170,10 @@ msgctxt "field:account.account.deferral,fiscalyear:"
 msgid "Fiscal Year"
 msgstr "Année fiscale"
 
+msgctxt "field:account.account.deferral,line_count:"
+msgid "Line Count"
+msgstr "Nombre de lignes"
+
 msgctxt "field:account.account.deferral,second_currency:"
 msgid "Second Currency"
 msgstr "Devise secondaire"
@@ -173,6 +181,74 @@ msgstr "Devise secondaire"
 msgctxt "field:account.account.deferral,second_currency_digits:"
 msgid "Second Currency Digits"
 msgstr "Décimales de la seconde devise"
+
+msgctxt "field:account.account.party,account:"
+msgid "Account"
+msgstr "Compte"
+
+msgctxt "field:account.account.party,active:"
+msgid "Active"
+msgstr "Actif"
+
+msgctxt "field:account.account.party,amount_second_currency:"
+msgid "Amount Second Currency"
+msgstr "Montant en devise secondaire"
+
+msgctxt "field:account.account.party,balance:"
+msgid "Balance"
+msgstr "Balance"
+
+msgctxt "field:account.account.party,closed:"
+msgid "Closed"
+msgstr "Clôturé"
+
+msgctxt "field:account.account.party,code:"
+msgid "Code"
+msgstr "Code"
+
+msgctxt "field:account.account.party,company:"
+msgid "Company"
+msgstr "Société"
+
+msgctxt "field:account.account.party,credit:"
+msgid "Credit"
+msgstr "Crédit"
+
+msgctxt "field:account.account.party,currency_digits:"
+msgid "Currency Digits"
+msgstr "Décimales de la devise"
+
+msgctxt "field:account.account.party,debit:"
+msgid "Debit"
+msgstr "Débit"
+
+msgctxt "field:account.account.party,debit_type:"
+msgid "Debit Type"
+msgstr "Type en débit"
+
+msgctxt "field:account.account.party,line_count:"
+msgid "Line Count"
+msgstr "Nombre de lignes"
+
+msgctxt "field:account.account.party,name:"
+msgid "Name"
+msgstr "Nom"
+
+msgctxt "field:account.account.party,party:"
+msgid "Party"
+msgstr "Tiers"
+
+msgctxt "field:account.account.party,second_currency:"
+msgid "Secondary Currency"
+msgstr "Devise secondaire"
+
+msgctxt "field:account.account.party,second_currency_digits:"
+msgid "Second Currency Digits"
+msgstr "Décimales de la seconde devise"
+
+msgctxt "field:account.account.party,type:"
+msgid "Type"
+msgstr "Type"
 
 msgctxt "field:account.account.template,childs:"
 msgid "Children"
@@ -661,6 +737,10 @@ msgctxt "field:account.general_ledger.account,general_ledger_balance:"
 msgid "General Ledger Balance"
 msgstr "Balance du grand livre"
 
+msgctxt "field:account.general_ledger.account,line_count:"
+msgid "Line Count"
+msgstr "Nombre de lignes"
+
 msgctxt "field:account.general_ledger.account,lines:"
 msgid "Lines"
 msgstr "Lignes"
@@ -716,6 +796,66 @@ msgstr "Période de départ"
 msgctxt "field:account.general_ledger.account.context,to_date:"
 msgid "To Date"
 msgstr "Date de fin"
+
+msgctxt "field:account.general_ledger.account.party,account:"
+msgid "Account"
+msgstr "Compte"
+
+msgctxt "field:account.general_ledger.account.party,active:"
+msgid "Active"
+msgstr "Actif"
+
+msgctxt "field:account.general_ledger.account.party,company:"
+msgid "Company"
+msgstr "Société"
+
+msgctxt "field:account.general_ledger.account.party,credit:"
+msgid "Credit"
+msgstr "Crédit"
+
+msgctxt "field:account.general_ledger.account.party,currency:"
+msgid "Currency"
+msgstr "Devise"
+
+msgctxt "field:account.general_ledger.account.party,currency_digits:"
+msgid "Currency Digits"
+msgstr "Décimales de la devise"
+
+msgctxt "field:account.general_ledger.account.party,debit:"
+msgid "Debit"
+msgstr "Débit"
+
+msgctxt "field:account.general_ledger.account.party,end_balance:"
+msgid "End Balance"
+msgstr "Balance finale"
+
+msgctxt "field:account.general_ledger.account.party,end_credit:"
+msgid "End Credit"
+msgstr "Crédit final"
+
+msgctxt "field:account.general_ledger.account.party,end_debit:"
+msgid "End Debit"
+msgstr "Débit final"
+
+msgctxt "field:account.general_ledger.account.party,line_count:"
+msgid "Line Count"
+msgstr "Nombre de lignes"
+
+msgctxt "field:account.general_ledger.account.party,party:"
+msgid "Party"
+msgstr "Tiers"
+
+msgctxt "field:account.general_ledger.account.party,start_balance:"
+msgid "Start Balance"
+msgstr "Balance de départ"
+
+msgctxt "field:account.general_ledger.account.party,start_credit:"
+msgid "Start Credit"
+msgstr "Crédit de départ"
+
+msgctxt "field:account.general_ledger.account.party,start_debit:"
+msgid "Start Debit"
+msgstr "Débit de départ"
 
 msgctxt "field:account.general_ledger.line,account:"
 msgid "Account"
@@ -2295,6 +2435,34 @@ msgstr "Journal - période"
 msgctxt "model:account.journal.sequence,name:"
 msgid "Journal Sequence"
 msgstr "Séquence de journal"
+
+msgctxt "model:account.journal.type,name:"
+msgid "Journal Type"
+msgstr "Type de journal"
+
+msgctxt "model:account.journal.type,name:journal_type_cash"
+msgid "Cash"
+msgstr "Espèces"
+
+msgctxt "model:account.journal.type,name:journal_type_expense"
+msgid "Expense"
+msgstr "Charge"
+
+msgctxt "model:account.journal.type,name:journal_type_general"
+msgid "General"
+msgstr "Général"
+
+msgctxt "model:account.journal.type,name:journal_type_revenue"
+msgid "Revenue"
+msgstr "Produit"
+
+msgctxt "model:account.journal.type,name:journal_type_situation"
+msgid "Situation"
+msgstr "Situation"
+
+msgctxt "model:account.journal.type,name:journal_type_write_off"
+msgid "Write-Off"
+msgstr "Pertes et profits"
 
 msgctxt "model:account.move,name:"
 msgid "Account Move"

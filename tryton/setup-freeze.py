@@ -8,6 +8,7 @@ import re
 import ssl
 import sys
 import tempfile
+
 from subprocess import Popen, PIPE, check_call
 
 from cx_Freeze import setup, Executable
@@ -28,8 +29,12 @@ include_files = [
         os.path.join('share', 'glib-2.0', 'schemas')),
     (os.path.join(sys.prefix, 'lib', 'gtk-3.0'),
         os.path.join('lib', 'gtk-3.0')),
+    (os.path.join(sys.prefix, 'lib', 'girepository-1.0'),
+        os.path.join('lib', 'girepository-1.0')),
     (os.path.join(sys.prefix, 'lib', 'gdk-pixbuf-2.0'),
         os.path.join('lib', 'gdk-pixbuf-2.0')),
+    (os.path.join(sys.prefix, 'lib', 'gtkglext-1.0'),
+        os.path.join('lib', 'gtkglext-1.0')),
     (os.path.join(sys.prefix, 'share', 'locale'),
         os.path.join('share', 'locale')),
     (os.path.join(sys.prefix, 'share', 'icons', 'Adwaita'),
@@ -38,7 +43,13 @@ include_files = [
         os.path.join('etc', 'gtk-3.0', 'gtk.immodules')),
     (os.path.join(sys.platform, 'gtk-3.0', 'gdk-pixbuf.loaders'),
         os.path.join('etc', 'gtk-3.0', 'gdk-pixbuf.loaders')),
+    (os.path.join(sys.platform, 'gtk-3.0', 'settings.ini'),
+        os.path.join('etc', 'gtk-3.0', 'settings.ini')),
     ]
+
+BIN_DIR = (os.path.join(sys.prefix, 'bin'))
+for dll in [x for x in os.listdir(BIN_DIR) if x.endswith('.dll')]:
+    include_files.append(os.path.join(sys.prefix, 'bin', dll))
 
 required_gi_namespaces = [
     'Atk-1.0',
@@ -50,7 +61,7 @@ required_gi_namespaces = [
     'Gio-2.0',
     'GooCanvas-[2-3].0',
     'Gtk-3.0',
-    'HarfBuzz-0.0',
+    'GtkSource-3.0',
     'Pango-1.0',
     'PangoCairo-1.0',
     'PangoFT2-1.0',
@@ -91,8 +102,21 @@ for ns in required_gi_namespaces:
     include_files.append((typefile_tmp, typefile_file))
 
 if sys.platform == 'win32':
+    include_files.extend([
+        ('share/themes/Coog', 'share/themes/Coog'),
+        ('share/languages/language2.rng', 'share/languages/language2.rng'),
+        ('share/languages/def.lang', 'share/languages/def.lang'),
+        ('share/languages/python.lang', 'share/languages/python.lang'),
+        ('share/languages/python3.lang', 'share/languages/python3.lang'),
+        ('share/styles/classic.xml', 'share/styles/classix.xml'),
+        ('share/styles/styles.rng', 'share/styles/styles.rng'),
+        (os.path.join(sys.prefix, 'ssl'), 'etc/ssl'),
+        ])
+    dll_paths = os.getenv('PATH', os.defpath).split(os.pathsep)
+    required_dlls = [
+        'librsvg-2-2.dll',
+        ]
     required_libs.update([
-        'libcroco-0.6-3.dll',
         'libepoxy-0.dll',
         ])
     lib_path = os.getenv('PATH', os.defpath).split(os.pathsep)
@@ -127,7 +151,9 @@ setup(name='tryton',
             'excludes': ['tkinter'],
             'silent': True,
             'packages': ['gi'],
+            'includes': ['gi', "gi.overrides.Gtk"],
             'include_msvcr': True,
+            'path': sys.path.append("girepository-1.0"),
             },
         'bdist_mac': {
             'iconfile': os.path.join(
@@ -137,6 +163,7 @@ setup(name='tryton',
         },
     executables=[Executable(
             'bin/tryton',
+            targetName='coog.exe',
             base='Win32GUI' if sys.platform == 'win32' else None,
             icon=os.path.join(
                 'tryton', 'data', 'pixmaps', 'tryton', 'tryton.ico'),

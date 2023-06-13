@@ -7,6 +7,7 @@ import platform
 import subprocess
 import tempfile
 import re
+import locale
 import logging
 import unicodedata
 import colorsys
@@ -40,7 +41,8 @@ from threading import Lock
 from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk
 
 from tryton import __version__
-from tryton.exceptions import TrytonServerError, TrytonError
+from tryton.exceptions import (
+    TrytonAuthenticationError, TrytonServerError, TrytonError)
 from tryton.pyson import PYSONEncoder
 from .underline import set_underline
 from .widget_style import widget_class
@@ -133,7 +135,10 @@ class IconFactory:
             try:
                 ET.register_namespace('', 'http://www.w3.org/2000/svg')
                 root = ET.fromstring(data)
-                root.attrib['fill'] = color
+                # If the color is set on the icon, we get it otherwise we take
+                # the color defined by default
+                if not root.attrib.get('fill'):
+                    root.attrib['fill'] = color
                 if badge:
                     if not isinstance(badge, str):
                         try:
@@ -472,11 +477,13 @@ def file_open(filename, type=None, print_p=False):
             save()
 
 
-def mailto(to=None, cc=None, subject=None, body=None, attachment=None):
+def mailto(to=None, cc=None, bcc=None, subject=None, body=None,
+        attachment=None):
     if CONFIG['client.email']:
         cmd = Template(CONFIG['client.email']).substitute(
                 to=to or '',
                 cc=cc or '',
+                bcc=bcc or '',
                 subject=subject or '',
                 body=body or '',
                 attachment=attachment or '',
@@ -488,6 +495,8 @@ def mailto(to=None, cc=None, subject=None, body=None, attachment=None):
         args = ['xdg-email', '--utf8']
         if cc:
             args.extend(['--cc', cc])
+        if bcc:
+            args.extend(['--bcc', bcc])
         if subject:
             args.extend(['--subject', subject])
         if body:
@@ -508,6 +517,8 @@ def mailto(to=None, cc=None, subject=None, body=None, attachment=None):
     url += '?'
     if cc:
         url += "&cc=" + urllib.parse.quote(cc, "@,")
+    if bcc:
+        url += "&bcc=" + urllib.parse.quote(bcc, "@,")
     if subject:
         url += "&subject=" + urllib.parse.quote(subject, "")
     if body:
@@ -581,10 +592,13 @@ class UserWarningDialog(WarningDialog):
 
     def build_dialog(self, *args, **kwargs):
         dialog = super().build_dialog(*args, **kwargs)
-        self.always = Gtk.CheckButton(label=_('Always ignore this warning.'))
-        alignment = Gtk.Alignment(xalign=0, yalign=0.5)
-        alignment.add(self.always)
-        dialog.vbox.pack_start(alignment, expand=True, fill=False, padding=0)
+
+        # Coog: Disable Warning Automatic By Pass
+        # self.always = Gtk.CheckButton(label=_('Always ignore this warning.'))
+        # alignment = Gtk.Alignment(xalign=0, yalign=0.5)
+        # alignment.add(self.always)
+        # dialog.vbox.pack_start(alignment, expand=True, fill=False, padding=0)
+
         label = Gtk.Label(
             label=_('Do you want to proceed?'), halign=Gtk.Align.END)
         dialog.vbox.pack_start(label, expand=True, fill=True, padding=0)
@@ -592,8 +606,9 @@ class UserWarningDialog(WarningDialog):
 
     def process_response(self, response):
         if response == Gtk.ResponseType.YES:
-            if self.always.get_active():
-                return 'always'
+            # Coog: Disable Warning Automatic By Pass
+            # if self.always.get_active():
+            #     return 'always'
             return 'ok'
         return 'cancel'
 
@@ -627,7 +642,7 @@ class Sur3BDialog(ConfirmationDialog):
         Gtk.ResponseType.YES: 'ok',
         Gtk.ResponseType.NO: 'ko',
         Gtk.ResponseType.CANCEL: 'cancel'
-    }
+        }
 
     def build_dialog(self, *args, **kwargs):
         dialog = super().build_dialog(*args, **kwargs)
@@ -707,7 +722,7 @@ class ConcurrencyDialog(UniqueDialog):
                 Window.create(
                     model,
                     res_id=id_,
-                    name=_("Compare: %s") % name,
+                    name=_("Compare: %s", name),
                     domain=[('id', '=', id_)],
                     context=context,
                     mode=['form'])
@@ -810,16 +825,17 @@ def check_version(box, version=__version__):
             _("Unable to check for new version."), exc_info=True)
         return True
     else:
-        if check_version(box, version):
-            info_bar = Gtk.InfoBar()
-            info_bar.get_content_area().pack_start(
-                Gtk.Label(label=_("A new version is available!")),
-                expand=True, fill=True, padding=0)
-            info_bar.set_show_close_button(True)
-            info_bar.add_button(_("Download"), Gtk.ResponseType.ACCEPT)
-            info_bar.connect('response', info_bar_response, box, url)
-            box.pack_start(info_bar, expand=True, fill=True, padding=0)
-            info_bar.show_all()
+        # Coog Specific: unplug check for new tryton version
+        # if check_version(box, version):
+        #     info_bar = Gtk.InfoBar()
+        #     info_bar.get_content_area().pack_start(
+        #         Gtk.Label(label=_("A new version is available!")),
+        #         expand=True, fill=True, padding=0)
+        #     info_bar.set_show_close_button(True)
+        #     info_bar.add_button(_("Download"), Gtk.ResponseType.ACCEPT)
+        #     info_bar.connect('response', info_bar_response, box, url)
+        #     box.pack_start(info_bar, expand=True, fill=True, padding=0)
+        #     info_bar.show_all()
         return False
 
 
@@ -874,14 +890,21 @@ def process_exception(exception, *args, **kwargs):
                 try:
                     Login()
                 except TrytonError as exception:
-                    if exception.faultCode == 'QueryCanceled':
-                        Main().on_quit()
-                        sys.exit()
-                    raise
+                    if exception.faultCode != 'QueryCanceled':
+                        message(
+                            _("Could not get a session."),
+                            msg_type=Gtk.MessageType.ERROR)
+                    Main().on_quit()
+                    sys.exit()
                 finally:
                     PLOCK.release()
                 if args:
                     return rpc_execute(*args)
+        elif exception.faultCode == 'TimeoutException':
+            message(
+                _("The server took too much time to answer.\n"
+                    "You may try again later."),
+                msg_type=Gtk.MessageType.ERROR)
         elif exception.faultCode == str(int(HTTPStatus.TOO_MANY_REQUESTS)):
             message(
                 _('Too many requests. Try again later.'),
@@ -1080,6 +1103,8 @@ def RPCContextReload(callback=None):
             rpc.CONTEXT.update(context())
         except RPCException:
             pass
+        if rpc._CLIENT_DATE:
+            rpc.CONTEXT['client_defined_date'] = rpc._CLIENT_DATE
         if callback:
             callback()
     # Use RPCProgress to not send rpc.CONTEXT
@@ -1090,6 +1115,8 @@ def RPCContextReload(callback=None):
     if not callback:
         rpc.context_reset()
         rpc.CONTEXT.update(context)
+        if rpc._CLIENT_DATE:
+            rpc.CONTEXT['client_defined_date'] = rpc._CLIENT_DATE
 
 
 class Tooltips(object):
@@ -1111,6 +1138,29 @@ class Tooltips(object):
             self._tooltips.disable()
 
 
+FORMAT_ERROR = "Wrong key format [type_]style_value: "
+
+# Color values: min = 0 max = 65535
+# You need to apply the percent to get the right color
+# http://www.december.com/html/spec/colorcodes.html
+
+COLOR_RGB = {
+    'red': [65535, 0, 0],
+    'green': [0, 65535, 0],
+    'blue': [0, 0, 65535],
+    'turquoise': [16383, 57670, 53738],
+    'gray': [49151, 49151, 49151],
+    'brown': [42597, 10485, 10485],
+    'maroon': [45219, 12451, 24903],
+    'violet': [60947, 33422, 60947],
+    'purple': [41287, 8519, 61602],
+    'yellow': [65535, 65535, 0],
+    'pink': [65535, 49151, 52428],
+    'beige': [62913, 62913, 56360],
+    'white': [65535, 65535, 65535],
+    'black': [0, 0, 0]
+}
+
 COLOR_SCHEMES = {
     'red': '#cf1d1d',
     'green': '#3fb41b',
@@ -1118,6 +1168,11 @@ COLOR_SCHEMES = {
     'grey': '#444444',
     'black': '#000000',
     'darkcyan': '#305755',
+    }
+
+COLORS = {
+    'invalid': '#ff6969',
+    'required': '#d2d2ff',
 }
 
 
@@ -1157,11 +1212,30 @@ def untimezoned_date(date):
     return timezoned_date(date, reverse=True)
 
 
-def humanize(size):
-    for x in ('bytes', 'KB', 'MB', 'GB', 'TB', 'PB'):
-        if size < 1000:
-            return '%3.1f%s' % (size, x)
-        size /= 1000.0
+def humanize(size, suffix=''):
+    if 0 < abs(size) < 1:
+        for u in ['', 'm', 'µ', 'n', 'p', 'f', 'a', 'z', 'y', 'r', 'q']:
+            if abs(size) >= 0.01:
+                break
+            size *= 1000.0
+        else:
+            size /= 1000.0
+    else:
+        for u in ['', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y', 'R', 'Q']:
+            if abs(size) <= 1000:
+                break
+            size /= 1000.0
+        else:
+            size *= 1000.0
+    if isinstance(size, int) or size.is_integer():
+        size = locale.localize(str(int(size)))
+    elif abs(size) < 0.01:
+        size = locale.localize(
+            '{0:f}'.format(size).rstrip('0').rstrip('.'))
+    else:
+        size = locale.localize(
+            '{0:.{1}f}'.format(size, 2).rstrip('0').rstrip('.'))
+    return ''.join([size, u, suffix])
 
 
 def get_hostname(netloc):

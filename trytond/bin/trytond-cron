@@ -20,5 +20,9 @@ commandline.config_log(options)
 # Import after application is configured
 import trytond.cron as cron
 
+# AKE: handle term signals
+handler = commandline.generate_signal_handler(options.pidfile)
+commandline.handle_signals(handler)
+
 with commandline.pidfile(options):
     cron.run(options)

@@ -14,10 +14,22 @@ from trytond.config import config
 
 parser = commandline.get_parser_admin()
 options = parser.parse_args()
+
+if options.check_update and options.update:
+    raise Exception\
+        ("Starting update and check update together is not allowed!")
+
 config.update_etc(options.configfile)
 commandline.config_log(options)
+
+# AKE: handle term signals
+handler = commandline.generate_signal_handler(None)
+commandline.handle_signals(handler)
 
 # Import after application is configured
 import trytond.admin as admin
 
 admin.run(options)
+
+# AKE: clean process (stop known threads)
+handler(0, None)

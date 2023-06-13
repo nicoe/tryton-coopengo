@@ -137,7 +137,7 @@ Post invoice::
     >>> len(line.commissions)
     2
     >>> [c.amount for c in line.commissions]
-    [Decimal('10.0000'), Decimal('10.0000')]
+    [Decimal('10.000000'), Decimal('10.000000')]
     >>> [c.invoice_state for c in line.commissions]
     ['', '']
 
@@ -145,13 +145,13 @@ Pending amount for agent::
 
     >>> agent.reload()
     >>> agent.pending_amount
-    Decimal('10.0000')
+    Decimal('10.000000')
 
 Pending amount for principal::
 
     >>> principal.reload()
     >>> principal.pending_amount
-    Decimal('10.0000')
+    Decimal('10.000000')
 
 Create commission invoices::
 

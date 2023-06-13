@@ -21,7 +21,7 @@ from trytond import security, backend
 from trytond.exceptions import RateLimitException
 from trytond.pool import Pool
 from trytond.transaction import Transaction
-from trytond.config import config
+from trytond.config import config, parse_uri
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,20 @@ class Request(_Request):
         authorization = super(Request, self).authorization
         if authorization is None:
             header = self.environ.get('HTTP_AUTHORIZATION')
-            return parse_authorization_header(header)
+            auth = parse_authorization_header(header)
+            if auth and auth.type == 'token':
+                database_name = self.view_args.get('database_name')
+                if not database_name:
+                    return None
+                user_id, party_id = security.check_token(
+                    database_name, auth.get('token'))
+                return Authorization('token', {
+                        'token': auth.get('token'),
+                        'user_id': user_id,
+                        'party_id': party_id
+                    })
+            else:
+                return auth
         return authorization
 
     @cached_property
@@ -71,6 +84,8 @@ class Request(_Request):
             user_id = security.check(
                 database_name, auth.get('userid'), auth.get('session'),
                 context=context)
+        elif auth.type == 'token':
+            user_id = auth.get('user_id')
         else:
             try:
                 user_id = security.login(
@@ -111,6 +126,13 @@ def parse_authorization_header(value):
                 'userid': userid,
                 'session': bytes_to_wsgi(session),
                 })
+    # JMO: the initial implementation used 'token',
+    # but the IETF specifies 'Bearer'
+    # (cf https://datatracker.ietf.org/doc/html/rfc6750#section-2.1 ).
+    # So, we allow both to maintain compatibility with previous uses,
+    # and be compatible with standard HTTP clients.
+    elif auth_type in (b'token', b'bearer'):
+        return Authorization('token', {'token': bytes_to_wsgi(auth_info)})
 
 
 def set_max_request_size(size):
@@ -129,6 +151,15 @@ def with_pool(func):
             with Transaction().start(database_name, 0, readonly=True):
                 pool.init()
         return func(request, pool, *args, **kwargs)
+    return wrapper
+
+
+def with_pool_by_config(func):
+    @wraps(func)
+    def wrapper(request, *args, **kwargs):
+        uri = config.get('database', 'uri')
+        database_name = parse_uri(uri).path[1:]
+        return with_pool(func)(request, database_name, *args, **kwargs)
     return wrapper
 
 

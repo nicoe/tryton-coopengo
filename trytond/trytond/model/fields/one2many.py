@@ -139,8 +139,10 @@ class One2Many(Field):
         targets = list(chain(*targets))
 
         for target in targets:
-            origin_id = getattr(target, self.field).id
-            res[origin_id].append(target.id)
+            # JCA: Fix one2many to not crash when loading missing field
+            if getattr(target, self.field):
+                origin_id = getattr(target, self.field).id
+                res[origin_id].append(target.id)
         return dict((key, tuple(value)) for key, value in res.items())
 
     def set(self, Model, name, ids, values, *args):
@@ -342,8 +344,6 @@ class One2Many(Field):
 
         if operator == 'not where':
             expression = ~expression
-        elif operator.startswith('!') or operator.startswith('not '):
-            expression |= ~table.id.in_(target.select(origin))
         return expression
 
     def definition(self, model, language):
@@ -363,7 +363,7 @@ class One2Many(Field):
         if self.size is not None:
             definition['size'] = encoder.encode(self.size)
         definition['sortable'] &= hasattr(model, 'order_' + self.name)
-        definition['order'] = (
-            getattr(self.get_target(), '_order', None)
+        definition['order'] = encoder.encode(
+            getattr(model, '_order', None)
             if self.order is None else self.order)
         return definition

@@ -38,6 +38,7 @@ class TabContent(InfoBar):
     def __init__(self, **attributes):
         super(TabContent, self).__init__()
         self.attributes = attributes.copy()
+        self.forced_count = False
 
     @property
     def menu_def(self):
@@ -180,9 +181,11 @@ class TabContent(InfoBar):
         self.widget.pack_start(title_box, expand=False, fill=True, padding=3)
 
         self.toolbar = self.create_toolbar(self.get_toolbars())
-        self.toolbar.show_all()
-        self.widget.pack_start(
-            self.toolbar, expand=False, fill=True, padding=0)
+        # JCA : Allow to hide buttons through the context
+        if not self.screen.context.get('disable_main_toolbar', None):
+            self.toolbar.show_all()
+            self.widget.pack_start(
+                self.toolbar, expand=False, fill=True, padding=0)
 
         viewport = Gtk.Viewport()
         viewport.set_shadow_type(Gtk.ShadowType.NONE)
@@ -213,18 +216,25 @@ class TabContent(InfoBar):
         title.show()
 
         menu = Gtk.MenuButton.new()
-        menu.set_relief(Gtk.ReliefStyle.NONE)
-        menu.set_popup(self.set_menu_form())
+        # JCA : Allow to hide tab menu
+        if not self.screen.context.get('disable_main_menu', None):
+            menu.set_relief(Gtk.ReliefStyle.NONE)
+            menu.set_popup(self.set_menu_form())
         menu.show()
 
+        click_catcher = Gtk.EventBox.new()
+        click_catcher.set_above_child(True)
+        click_catcher.connect('button-press-event', self._force_count)
         self.status_label = Gtk.Label(
             margin=5, halign=Gtk.Align.END)
         widget_class(self.status_label, 'status', True)
         self.status_label.show()
+        click_catcher.add(self.status_label)
+        click_catcher.show()
 
         hbox = Gtk.HBox()
         hbox.pack_start(title, expand=True, fill=True, padding=0)
-        hbox.pack_start(self.status_label, expand=False, fill=True, padding=0)
+        hbox.pack_start(click_catcher, expand=False, fill=True, padding=0)
         hbox.show()
 
         frame = Gtk.Frame()
@@ -314,3 +324,6 @@ class TabContent(InfoBar):
 
     def compare(self, model, attributes):
         return False
+
+    def _force_count(self, eventbox, event):
+        self.forced_count = True

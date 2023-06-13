@@ -24,7 +24,7 @@
             }
             return added;
         },
-        execute: function(method, params, context, async) {
+        execute: function(method, params, context, async, process_exception) {
             if (context === undefined) {
                 context = {};
             }
@@ -32,7 +32,7 @@
                 'method': 'model.' + this.name + '.' + method,
                 'params': params.concat(context)
             };
-            return Sao.rpc(args, this.session, async);
+            return Sao.rpc(args, this.session, async, process_exception);
         },
         copy: function(records, context) {
             if (jQuery.isEmptyObject(records)) {
@@ -562,7 +562,19 @@
             this.destroyed = false;
         },
         has_changed: function() {
-            return !jQuery.isEmptyObject(this._changed);
+            var result = !jQuery.isEmptyObject(this._changed);
+            // JCA : #15014 Add a way to make sure some fields are always
+            // ignored when detecting whether the record needs saving or not
+            if (result === false) {
+                return result;
+            }
+            return Object.keys(this._changed).some(
+          this.check_field_never_modified.bind(this));
+        },
+        check_field_never_modified: function(field) {
+            var fields = this.group.model.fields;
+            return !Object.keys(fields).includes(field) ||
+                !fields[field].description.never_modified;
         },
         save: function(force_reload) {
             if (force_reload === undefined) {
@@ -682,6 +694,7 @@
                     fnames.push(fname);
                 }
             }
+
             var fnames_to_fetch = fnames.slice();
             var rec_named_fields = ['many2one', 'one2one', 'reference'];
             for (var i in fnames) {
@@ -1172,7 +1185,7 @@
             try {
                 result = this.model.execute(
                     'autocomplete_' + fieldname, [values], this.get_context(),
-                    false);
+                    false, false);
             } catch (e) {
                 result = [];
             }
@@ -1426,6 +1439,15 @@
                 }
             }
             this.destroyed = true;
+        },
+        _set_modified: function() {
+            var parent = this.group.parent;
+            if (parent) {
+                parent._changed[this.group.child_name] = true;
+                parent.model.fields[this.group.child_name].changed(parent);
+                parent.validate(null, true, false, true);
+                parent._set_modified();
+            }
         }
     });
 
@@ -1517,8 +1539,9 @@
             return this.get(record);
         },
         set_default: function(record, value) {
-            this.set(record, value);
+            var promise = this.set(record, value);
             record._changed[this.name] = true;
+            return promise;
         },
         set_on_change: function(record, value) {
             this.set(record, value);
@@ -1705,6 +1728,12 @@
 
     Sao.field.Char = Sao.class_(Sao.field.Field, {
         _default: '',
+        set: function(record, value) {
+            if (this.description.strip && value) {
+                value = value.trim();
+            }
+            Sao.field.Char._super.set.call(this, record, value);
+        },
         get: function(record) {
             return Sao.field.Char._super.get.call(this, record) || this._default;
         }
@@ -1961,6 +1990,7 @@
             return rec_name;
         },
         set: function(record, value) {
+            var promise;
             var rec_name = (
                 record._values[this.name + '.'] || {}).rec_name || '';
             var store_rec_name = function(rec_name) {
@@ -1971,7 +2001,7 @@
             if (!rec_name && (value >= 0) && (value !== null)) {
                 var model_name = record.model.fields[this.name].description
                     .relation;
-                Sao.rpc({
+                promise = Sao.rpc({
                     'method': 'model.' + model_name + '.read',
                     'params': [[value], ['rec_name'], record.get_context()]
                 }, record.model.session).done(store_rec_name.bind(this)).done(
@@ -1985,6 +2015,7 @@
                 store_rec_name.call(this, [{'rec_name': rec_name}]);
             }
             record._values[this.name] = value;
+            return promise;
         },
         set_client: function(record, value, force_change) {
             var rec_name;
@@ -2694,10 +2725,6 @@
             var batchlen = Math.min(10, Sao.config.limit);
 
             keys = jQuery.extend([], keys);
-            var get_keys = function(key_ids) {
-                return this.schema_model.execute('get_keys',
-                        [key_ids], context).then(update_keys);
-            }.bind(this);
             var update_keys = function(values) {
                 for (var i = 0, len = values.length; i < len; i++) {
                     var k = values[i];
@@ -2708,24 +2735,26 @@
             var prms = [];
             while (keys.length > 0) {
                 var sub_keys = keys.splice(0, batchlen);
-                prms.push(this.schema_model.execute('search',
+                prms.push(this.schema_model.execute('search_get_keys',
                             [[['name', 'in', sub_keys], domain],
-                            0, Sao.config.limit, null], context)
-                        .then(get_keys));
+                                Sao.config.limit],
+                            context)
+                        .then(update_keys));
             }
             return jQuery.when.apply(jQuery, prms);
         },
         add_new_keys: function(ids, record) {
             var context = this.get_context(record);
-            return this.schema_model.execute('get_keys', [ids], context)
-                .then(function(new_fields) {
-                    var names = [];
-                    new_fields.forEach(function(new_field) {
-                        this.keys[new_field.name] = new_field;
-                        names.push(new_field.name);
+            return this.schema_model.execute(
+                'search_get_keys', [[['id', 'in', ids]]], context).then(
+                    function(new_fields) {
+                        var names = [];
+                        new_fields.forEach(function(new_field) {
+                            this.keys[new_field.name] = new_field;
+                            names.push(new_field.name);
+                        }.bind(this));
+                        return names;
                     }.bind(this));
-                    return names;
-                }.bind(this));
         },
         validate: function(record, softvalidation, pre_validate) {
             var valid = Sao.field.Dict._super.validate.call(

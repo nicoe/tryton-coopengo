@@ -119,8 +119,8 @@ msgstr "Rapporter un bogue"
 msgid "Check URL: %s"
 msgstr "Vérification de l'URL: %s"
 
-msgid "Unable to check for new version"
-msgstr "Impossible de vérifier les nouvelles versions"
+msgid "Unable to check for new version."
+msgstr "Impossible de vérifier les nouvelles versions."
 
 msgid "A new version is available!"
 msgstr "Un nouvelle version est disponible !"
@@ -481,11 +481,11 @@ msgstr "Récupération de la liste des bases de données"
 msgid "Username:"
 msgstr "Nom d'utilisateur :"
 
-msgid "Incompatible version of the server"
-msgstr "Version du serveur incompatible"
+msgid "Incompatible version of the server."
+msgstr "Version du serveur incompatible."
 
-msgid "Could not connect to the server"
-msgstr "Impossible de se connecter au serveur"
+msgid "Could not connect to the server."
+msgstr "Impossible de se connecter au serveur."
 
 msgid "Login"
 msgstr "Connexion"
@@ -883,6 +883,9 @@ msgstr "Supprimer l'enregistrement sélectionné<Del>"
 msgid "Undelete selected record <Ins>"
 msgstr "Restaurer l'enregistrement sélectionné<Ins>"
 
+msgid "Are you sure you want to delete this record?"
+msgstr "Êtes-vous sûr de vouloir supprimer cet enregistrement ?"
+
 #, python-format
 msgid "CSV Import: %s"
 msgstr "Import CSV: %s"
@@ -934,6 +937,18 @@ msgstr "Assistant"
 msgid "ID"
 msgstr "ID"
 
+msgid "Created at"
+msgstr "Crée le"
+
+msgid "Created by"
+msgstr "Créé par"
+
+msgid "Edited at"
+msgstr "Édité le"
+
+msgid "Edited by"
+msgstr "Édité par"
+
 msgid "Creation User"
 msgstr "Créé par l'utilisateur"
 
@@ -954,16 +969,16 @@ msgid "Unable to set view tree state"
 msgstr "Impossible de définir l'état de la vue arbre"
 
 #, python-format
-msgid "\"%s\" is not valid according to its domain"
-msgstr "« %s » n'est pas valide selon son domaine"
+msgid "\"%s\" is not valid according to its domain."
+msgstr "« %s » n'est pas valide selon son domaine."
 
 #, python-format
-msgid "\"%s\" is required"
-msgstr "« %s » est requis"
+msgid "\"%s\" is required."
+msgstr "« %s » est requis."
 
 #, python-format
-msgid "The values of \"%s\" are not valid"
-msgstr "Les valeurs de « %s » ne sont pas valides"
+msgid "The values of \"%s\" are not valid."
+msgstr "Les valeurs de « %s » ne sont pas valides."
 
 msgid "Pre-validation"
 msgstr "Pré-validation"

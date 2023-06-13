@@ -5,6 +5,7 @@ from threading import RLock
 import logging
 from trytond.modules import load_modules, register_classes
 from trytond.transaction import Transaction
+from trytond.server_context import ServerContext
 import builtins
 
 __all__ = ['Pool', 'PoolMeta', 'PoolBase', 'isregisteredby']
@@ -54,6 +55,8 @@ class Pool(object):
     _pool = {}
     test = False
     _instances = {}
+    _init_hooks = {}
+    _post_init_calls = {}
 
     def __new__(cls, database_name=None):
         if database_name is None:
@@ -93,6 +96,12 @@ class Pool(object):
     def register_mixin(mixin, classinfo, module):
         Pool.classes_mixin[module].append((classinfo, mixin))
 
+    @staticmethod
+    def register_post_init_hooks(*hooks, **kwargs):
+        if kwargs['module'] not in Pool._init_hooks:
+            Pool._init_hooks[kwargs['module']] = []
+        Pool._init_hooks[kwargs['module']] += hooks
+
     @classmethod
     def start(cls):
         '''
@@ -101,6 +110,7 @@ class Pool(object):
         with cls._lock:
             for classes in Pool.classes.values():
                 classes.clear()
+            cls._init_hooks = {}
             register_classes()
             cls._started = True
 
@@ -126,7 +136,7 @@ class Pool(object):
         '''
         with cls._lock:
             databases = []
-            for database in cls._pool.keys():
+            for database in list(cls._pool.keys()):
                 if cls._locks.get(database):
                     if cls._locks[database].acquire(False):
                         databases.append(database)
@@ -146,9 +156,14 @@ class Pool(object):
         Set update to proceed to update
         lang is a list of language code to be updated
         '''
+        # ABDC: inter-workers communication
+        from trytond import iwc
         with self._lock:
+            # ABDC: inter-workers communication
+            iwc.start(self.database_name)
             if not self._started:
                 self.start()
+
         with self._locks[self.database_name]:
             # Don't reset pool if already init and not to update
             if not update and self._pool.get(self.database_name):
@@ -156,12 +171,21 @@ class Pool(object):
             logger.info('init pool for "%s"', self.database_name)
             self._pool.setdefault(self.database_name, {})
             # Clean the _pool before loading modules
-            for type in self.classes.keys():
+            for type in list(self.classes.keys()):
                 self._pool[self.database_name][type] = {}
-            restart = not load_modules(self.database_name, self, update=update,
-                    lang=lang, activatedeps=activatedeps)
+            self._post_init_calls[self.database_name] = []
+            with ServerContext().set_context(disable_auto_cache=True):
+                restart = not load_modules(self.database_name, self,
+                    update=update, lang=lang, activatedeps=activatedeps)
             if restart:
                 self.init()
+            # ABDC: inter-workers communication
+            if update:
+                iwc.broadcast_init_pool(self.database_name)
+
+    def post_init(self, update):
+        for hook in self._post_init_calls[self.database_name]:
+            hook(self, update)
 
     def get(self, name, type='model'):
         '''
@@ -172,7 +196,7 @@ class Pool(object):
         :return: the instance
         '''
         if type == '*':
-            for type in self.classes.keys():
+            for type in list(self.classes.keys()):
                 if name in self._pool[self.database_name][type]:
                     break
         try:
@@ -210,7 +234,7 @@ class Pool(object):
         Return a list of classes for each type in a dictionary.
         '''
         classes = {}
-        for type_ in self.classes.keys():
+        for type_ in list(self.classes.keys()):
             classes[type_] = []
             for cls, depends in self.classes[type_].get(module, {}).items():
                 if not depends.issubset(modules):
@@ -224,6 +248,8 @@ class Pool(object):
                 assert issubclass(cls, PoolBase), cls
                 self.add(cls, type=type_)
                 classes[type_].append(cls)
+        self._post_init_calls[self.database_name] += self._init_hooks.get(
+            module, [])
         return classes
 
     def setup(self, classes=None):
@@ -244,7 +270,7 @@ class Pool(object):
         for module in modules:
             if module not in self.classes_mixin:
                 continue
-            for type_ in self.classes.keys():
+            for type_ in list(self.classes.keys()):
                 for _, cls in self.iterobject(type=type_):
                     for parent, mixin in self.classes_mixin[module]:
                         if (not issubclass(cls, parent)

@@ -46,7 +46,8 @@ class Many2Many(Widget):
         self.wid_text = Gtk.Entry()
         self.wid_text.set_placeholder_text(_('Search'))
         self.wid_text.set_property('width_chars', 13)
-        self.wid_text.connect('focus-out-event', self._focus_out)
+        self.focus_out_id = self.wid_text.connect(
+            'focus-out-event', self._focus_out)
         self.focus_out = True
         hbox.pack_start(self.wid_text, expand=True, fill=True, padding=0)
 
@@ -83,8 +84,12 @@ class Many2Many(Widget):
 
         frame = Gtk.Frame()
         frame.add(hbox)
-        frame.set_shadow_type(Gtk.ShadowType.OUT)
-        vbox.pack_start(frame, expand=False, fill=True, padding=0)
+        # XXX: support expand_toolbar
+        if attrs.get('expand_toolbar'):
+            frame.set_shadow_type(Gtk.ShadowType.NONE)
+        else:
+            frame.set_shadow_type(Gtk.ShadowType.OUT)
+            vbox.pack_start(frame, expand=False, fill=True, padding=0)
 
         self.screen = Screen(attrs['relation'],
             view_ids=attrs.get('view_ids', '').split(','),
@@ -101,6 +106,11 @@ class Many2Many(Widget):
 
         self.screen.widget.connect('key_press_event', self.on_keypress)
         self.wid_text.connect('key_press_event', self.on_keypress)
+
+    def _color_widget(self):
+        if hasattr(self.screen.current_view, 'treeview'):
+            return self.screen.current_view.treeview
+        return super(Many2Many, self)._color_widget()
 
     def on_keypress(self, widget, event):
         editable = self.wid_text.get_editable()
@@ -131,7 +141,7 @@ class Many2Many(Widget):
         return False
 
     def destroy(self):
-        self.wid_text.disconnect_by_func(self._focus_out)
+        self.wid_text.disconnect(self.focus_out_id)
         self.screen.destroy()
 
     def _sig_add(self, *args):
@@ -288,12 +298,7 @@ class Many2Many(Widget):
         if not self.record:
             return
         model = self.attrs['relation']
-        domain = self.field.domain_get(self.record)
-        add_remove = self.record.expr_eval(self.attrs.get('add_remove'))
-        if add_remove:
-            domain = [domain, add_remove]
-        update_completion(
-            self.wid_text, self.record, self.field, model, domain)
+        update_completion(self.wid_text, self.record, self.field, model)
 
     def _completion_action_activated(self, completion, index):
         if index == 0:

@@ -278,7 +278,7 @@ msgstr "ノーマル(_N)"
 msgid "Display format"
 msgstr ""
 
-#: tryton/common/datetime_.py:63
+#: tryton/common/datetime_.py:64
 #, fuzzy
 msgid "Open the calendar"
 msgstr "カレンダーを開く"
@@ -780,6 +780,7 @@ msgstr ""
 #: tryton/gui/window/preference.py:25
 msgid "Preferences"
 msgstr "設定"
+
 
 #: tryton/gui/window/preference.py:58
 msgid "Edit User Preferences"

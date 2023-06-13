@@ -1,12 +1,12 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
 import datetime
-from itertools import islice, chain, product, groupby
+from itertools import islice, chain, product, groupby, repeat
 from collections import OrderedDict, defaultdict
 from functools import wraps
 
 from sql import (Table, Column, Literal, Desc, Asc, Expression, Null,
-    NullsFirst, NullsLast, For)
+    NullsFirst, NullsLast, For, Union)
 from sql.functions import CurrentTimestamp, Extract
 from sql.conditionals import Coalesce
 from sql.operators import Or, And, Operator, Equal
@@ -276,8 +276,9 @@ class ModelSQL(ModelStorage):
                 elif ref:
                     table.add_fk(field_name, ref, field.ondelete)
 
-            table.index_action(
-                field_name, action=field.select and 'add' or 'remove')
+            # Do not remove previously set indexes
+            if field.select:
+                table.index_action(field_name, action='add')
 
             required = field.required
             # Do not set 'NOT NULL' for Binary field as the database column
@@ -665,8 +666,9 @@ class ModelSQL(ModelStorage):
 
         cls._insert_history(new_ids)
 
-        field_names = list(cls._fields.keys())
-        cls._update_mptt(field_names, [new_ids] * len(field_names))
+        if cls._mptt_fields:
+            field_names = list(sorted(cls._mptt_fields))
+            cls._update_mptt(field_names, repeat(new_ids, len(field_names)))
 
         cls.__check_domain_rule(new_ids, 'create')
         records = cls.browse(new_ids)
@@ -723,24 +725,29 @@ class ModelSQL(ModelStorage):
             in_max = 1
             table = cls.__table_history__()
             column = Coalesce(table.write_date, table.create_date)
-            history_clause = (column <= Transaction().context['_datetime'])
+            if Transaction().context.get('_datetime_exclude', False):
+                history_clause = (column < Transaction().context['_datetime'])
+            else:
+                history_clause = (column <= Transaction().context['_datetime'])
             history_order = (column.desc, Column(table, '__id').desc)
             history_limit = 1
 
-        columns = []
+        columns = {}
         for f in all_fields:
             field = cls._fields.get(f)
             if field and field.sql_type():
-                columns.append(field.sql_column(table).as_(f))
+                columns[f] = field.sql_column(table).as_(f)
             elif f == '_timestamp' and not callable(cls.table_query):
                 sql_type = fields.Char('timestamp').sql_type().base
-                columns.append(Extract('EPOCH',
-                        Coalesce(table.write_date, table.create_date)
-                        ).cast(sql_type).as_('_timestamp'))
+                columns[f] = Extract(
+                    'EPOCH', Coalesce(table.write_date, table.create_date)
+                    ).cast(sql_type).as_('_timestamp')
 
-        if len(columns):
+        if 'write_date' not in fields_names and len(columns) == 1:
+            columns.pop('write_date')
+        if columns:
             if 'id' not in fields_names:
-                columns.append(table.id.as_('id'))
+                columns['id'] = table.id.as_('id')
 
             tables = {None: (table, None)}
             if domain:
@@ -755,7 +762,7 @@ class ModelSQL(ModelStorage):
                     where &= history_clause
                 if domain:
                     where &= dom_exp
-                cursor.execute(*from_.select(*columns, where=where,
+                cursor.execute(*from_.select(*columns.values(), where=where,
                         order_by=history_order, limit=history_limit))
                 fetchall = list(cursor_dict(cursor))
                 if not len(fetchall) == len({}.fromkeys(sub_ids)):
@@ -771,9 +778,7 @@ class ModelSQL(ModelStorage):
         max_write_date = max(
             (r['write_date'] for r in result if r.get('write_date')),
             default=None)
-        for column in columns:
-            # Split the output name to remove SQLite type detection
-            fname = column.output_name.split()[0]
+        for fname, column in columns.items():
             if fname == '_timestamp':
                 continue
             field = cls._fields[fname]
@@ -836,11 +841,15 @@ class ModelSQL(ModelStorage):
                         date_result = date_results[fname]
                         row[fname] = date_result[row['id']]
             else:
-                getter_results = field.get(ids, cls, field_list, values=result)
-                for fname in field_list:
-                    getter_result = getter_results[fname]
-                    for row in result:
-                        row[fname] = getter_result[row['id']]
+                for sub_results in grouped_slice(result, cache_size()):
+                    sub_results = list(sub_results)
+                    sub_ids = [r['id'] for r in sub_results]
+                    getter_results = field.get(
+                        sub_ids, cls, field_list, values=sub_results)
+                    for fname in field_list:
+                        getter_result = getter_results[fname]
+                        for row in sub_results:
+                            row[fname] = getter_result[row['id']]
 
         def read_related(field, Target, rows, fields):
             name = field.name
@@ -881,7 +890,9 @@ class ModelSQL(ModelStorage):
 
         to_del = set()
         for fname in set(fields_related.keys()) | extra_fields:
-            if fname not in fields_names:
+            # 'write_date' has been added to extra_fields but not read
+            if ((fname != 'write_date' or 'write_date' in columns)
+                    and fname not in fields_names):
                 to_del.add(fname)
             if fname not in cls._fields:
                 continue
@@ -1003,9 +1014,12 @@ class ModelSQL(ModelStorage):
                 if hasattr(field, 'set'):
                     fields_to_set.setdefault(fname, []).extend((ids, value))
 
-            field_names = list(values.keys())
-            cls._update_mptt(field_names, [ids] * len(field_names), values)
-            all_field_names |= set(field_names)
+            mptt_fields = cls._mptt_fields & set(values)
+            if mptt_fields:
+                cls._update_mptt(
+                    list(sorted(mptt_fields)), repeat(ids, len(mptt_fields)),
+                    values)
+            all_field_names |= set(values)
 
         for fname in sorted(fields_to_set, key=cls.index_set_field):
             fargs = fields_to_set[fname]
@@ -1043,20 +1057,18 @@ class ModelSQL(ModelStorage):
         cls.__check_timestamp(ids)
         cls.__check_domain_rule(ids, 'delete')
 
-        has_translation = False
         tree_ids = {}
-        for fname, field in cls._fields.items():
-            if (isinstance(field, fields.Many2One)
-                    and field.model_name == cls.__name__
-                    and field.left and field.right):
-                tree_ids[fname] = []
-                for sub_ids in grouped_slice(ids):
-                    where = reduce_ids(field.sql_column(table), sub_ids)
-                    cursor.execute(*table.select(table.id, where=where))
-                    tree_ids[fname] += [x[0] for x in cursor.fetchall()]
-            if (getattr(field, 'translate', False)
-                    and not hasattr(field, 'set')):
-                has_translation = True
+        for fname in cls._mptt_fields:
+            field = cls._fields[fname]
+            tree_ids[fname] = []
+            for sub_ids in grouped_slice(ids):
+                where = reduce_ids(field.sql_column(table), sub_ids)
+                cursor.execute(*table.select(table.id, where=where))
+                tree_ids[fname] += [x[0] for x in cursor.fetchall()]
+
+        has_translation = any(
+            getattr(f, 'translate', False) and not hasattr(f, 'set')
+            for f in cls._fields.values())
 
         foreign_keys_tocheck = []
         foreign_keys_toupdate = []
@@ -1234,20 +1246,115 @@ class ModelSQL(ModelStorage):
             raise AccessError(msg)
 
     @classmethod
-    def search(cls, domain, offset=0, limit=None, order=None, count=False,
-            query=False):
+    def __search_query(cls, domain, count, query, order):
         pool = Pool()
         Rule = pool.get('ir.rule')
-        transaction = Transaction()
-        cursor = transaction.connection.cursor()
 
-        super(ModelSQL, cls).search(
-            domain, offset=offset, limit=limit, order=order, count=count)
+        rule_domain = Rule.domain_get(cls.__name__, mode='read')
+        joined_domains = None
+        if domain and domain[0] == 'OR':
+            local_domains, subquery_domains = split_subquery_domain(domain)
+            if local_domains:
+                local_domains = [['OR'] + local_domains]
+            if subquery_domains:
+                joined_domains = subquery_domains
+                if local_domains:
+                    local_domains.insert(0, 'OR')
+                    joined_domains.append(local_domains)
 
-        # Get domain clauses
-        tables, expression = cls.search_domain(domain)
+        def get_local_columns(order_exprs):
+            local_columns = []
+            for order_expr in order_exprs:
+                if (isinstance(order_expr, Column)
+                        and isinstance(order_expr._from, Table)
+                        and order_expr._from._name == cls._table):
+                    local_columns.append(order_expr._name)
+                else:
+                    raise NotImplementedError
+            return local_columns
 
-        # Get order by
+        # The UNION optimization needs the columns used to order the query
+        extra_columns = set()
+        if order and joined_domains:
+            tables = {
+                None: (cls.__table__(), None),
+                }
+            for oexpr, otype in order:
+                fname = oexpr.partition('.')[0]
+                field = cls._fields[fname]
+                field_orders = field.convert_order(oexpr, tables, cls)
+                try:
+                    order_columns = get_local_columns(field_orders)
+                    extra_columns.update(order_columns)
+                except NotImplementedError:
+                    joined_domains = None
+                    break
+
+        # In case the search uses subqueries it's more efficient to use a UNION
+        # of queries than using clauses with some JOIN because databases can
+        # used indexes
+        if joined_domains is not None:
+            union_tables = []
+            for sub_domain in joined_domains:
+                tables, expression = cls.search_domain(sub_domain)
+                if rule_domain:
+                    tables, domain_exp = cls.search_domain(
+                        rule_domain, active_test=False, tables=tables)
+                    expression &= domain_exp
+                main_table, _ = tables[None]
+                table = convert_from(None, tables)
+                columns = cls.__searched_columns(main_table,
+                    eager=not count and not query,
+                    extra_columns=extra_columns)
+                union_tables.append(table.select(
+                        *columns, where=expression))
+            expression = None
+            tables = {
+                None: (Union(*union_tables, all_=False), None),
+                }
+        else:
+            tables, expression = cls.search_domain(domain)
+            if rule_domain:
+                tables, domain_exp = cls.search_domain(
+                    rule_domain, active_test=False, tables=tables)
+                expression &= domain_exp
+
+        return tables, expression
+
+    @classmethod
+    def __searched_columns(
+            cls, table, *, eager=False, history=False, extra_columns=None):
+        if extra_columns is None:
+            extra_columns = []
+        else:
+            extra_columns = sorted(extra_columns - {'id', '__id', '_datetime'})
+        columns = [table.id.as_('id')]
+        if (cls._history and Transaction().context.get('_datetime')
+                and (eager or history)):
+            columns.append(
+                Coalesce(table.write_date, table.create_date).as_('_datetime'))
+            columns.append(Column(table, '__id').as_('__id'))
+        for column_name in extra_columns:
+            field = cls._fields[column_name]
+            sql_column = field.sql_column(table).as_(column_name)
+            columns.append(sql_column)
+        if eager:
+            columns += [f.sql_column(table).as_(n)
+                for n, f in sorted(cls._fields.items())
+                if not hasattr(f, 'get')
+                    and n not in extra_columns
+                    and n != 'id'
+                    and not getattr(f, 'translate', False)
+                    and f.loading == 'eager']
+            if not callable(cls.table_query):
+                sql_type = fields.Char('timestamp').sql_type().base
+                columns += [Extract('EPOCH',
+                        Coalesce(table.write_date, table.create_date)
+                        ).cast(sql_type).as_('_timestamp')]
+        return columns
+
+    @classmethod
+    def __search_order(cls, order, tables):
         order_by = []
         order_types = {
             'DESC': Desc,
@@ -1258,8 +1365,6 @@ class ModelSQL(ModelStorage):
             'NULLS LAST': NullsLast,
             None: lambda _: _
             }
-        if order is None or order is False:
-            order = cls._order
         for oexpr, otype in order:
             fname, _, extra_expr = oexpr.partition('.')
             field = cls._fields[fname]
@@ -1276,42 +1381,44 @@ class ModelSQL(ModelStorage):
             forder = field.convert_order(oexpr, tables, cls)
             order_by.extend((NullOrdering(Order(o)) for o in forder))
 
-        # construct a clause for the rules :
-        domain = Rule.domain_get(cls.__name__, mode='read')
-        if domain:
-            tables, dom_exp = cls.search_domain(
-                domain, active_test=False, tables=tables)
-            expression &= dom_exp
+        return order_by
+
+    @classmethod
+    def search(cls, domain, offset=0, limit=None, order=None, count=False,
+            query=False):
+        transaction = Transaction()
+        cursor = transaction.connection.cursor()
+
+        super(ModelSQL, cls).search(
+            domain, offset=offset, limit=limit, order=order, count=count)
+
+        if order is None or order is False:
+            order = cls._order
+        tables, expression = cls.__search_query(domain, count, query, order)
 
         main_table, _ = tables[None]
-        table = convert_from(None, tables)
-
         if count:
-            cursor.execute(*table.select(Count(Literal('*')),
-                    where=expression, limit=limit, offset=offset))
-            return cursor.fetchone()[0]
-        # execute the "main" query to fetch the ids we were searching for
-        columns = [main_table.id.as_('id')]
-        if (cls._history and transaction.context.get('_datetime')
-                and not query):
-            columns.append(Coalesce(
-                    main_table.write_date,
-                    main_table.create_date).as_('_datetime'))
-            columns.append(Column(main_table, '__id').as_('__id'))
-        if not query:
-            columns += [f.sql_column(main_table).as_(n)
-                for n, f in cls._fields.items()
-                if not hasattr(f, 'get')
-                and n != 'id'
-                and not getattr(f, 'translate', False)
-                and f.loading == 'eager']
-            if not callable(cls.table_query):
-                sql_type = fields.Char('timestamp').sql_type().base
-                columns += [Extract('EPOCH',
-                        Coalesce(main_table.write_date, main_table.create_date)
-                        ).cast(sql_type).as_('_timestamp')]
-        select = table.select(*columns,
-            where=expression, order_by=order_by, limit=limit, offset=offset)
+            table = convert_from(None, tables)
+            if (limit is not None and limit < cls.count()) or offset:
+                select = table.select(
+                    Literal(1), where=expression, limit=limit, offset=offset
+                    ).select(Count(Literal('*')))
+            else:
+                select = table.select(Count(Literal('*')), where=expression)
+            if query:
+                return select
+            else:
+                cursor.execute(*select)
+                return cursor.fetchone()[0]
+
+        order_by = cls.__search_order(order, tables)
+        # compute it here because __search_order might modify tables
+        table = convert_from(None, tables)
+        columns = cls.__searched_columns(main_table, eager=not query)
+        select = table.select(
+            *columns, where=expression, limit=limit, offset=offset,
+            order_by=order_by)
+
         if query:
             return select
         cursor.execute(*select)
@@ -1340,6 +1447,12 @@ class ModelSQL(ModelStorage):
 
             to_delete = set()
             history = cls.__table_history__()
+            if transaction.context.get('_datetime_exclude', False):
+                history_clause = (
+                    history.write_date < transaction.context['_datetime'])
+            else:
+                history_clause = (
+                    history.write_date <= transaction.context['_datetime'])
             for sub_ids in grouped_slice([r['id'] for r in rows]):
                 where = reduce_ids(history.id, sub_ids)
                 cursor.execute(*history.select(
@@ -1348,8 +1461,7 @@ class ModelSQL(ModelStorage):
                         where=where
                         & (history.write_date != Null)
                         & (history.create_date == Null)
-                        & (history.write_date
-                            <= transaction.context['_datetime'])))
+                        & history_clause))
                 for deleted_id, delete_date in cursor.fetchall():
                     history_date, _ = ids_history[deleted_id]
                     if isinstance(history_date, str):
@@ -1386,12 +1498,7 @@ class ModelSQL(ModelStorage):
                 cache[cls.__name__].setdefault(data['id'], {}).update(data)
 
         if len(rows) >= transaction.database.IN_MAX:
-            if (cls._history
-                    and transaction.context.get('_datetime')
-                    and not query):
-                columns = columns[:3]
-            else:
-                columns = columns[:1]
+            columns = cls.__searched_columns(main_table, history=True)
             cursor.execute(*table.select(*columns,
                     where=expression, order_by=order_by,
                     limit=limit, offset=offset))
@@ -1436,8 +1543,11 @@ class ModelSQL(ModelStorage):
 
         if cls._history and transaction.context.get('_datetime'):
             table, _ = tables[None]
-            expression &= (Coalesce(table.write_date, table.create_date)
-                <= transaction.context['_datetime'])
+            hcolumn = Coalesce(table.write_date, table.create_date)
+            if transaction.context.get('_datetime_exclude', False):
+                expression &= (hcolumn < transaction.context['_datetime'])
+            else:
+                expression &= (hcolumn <= transaction.context['_datetime'])
         return tables, expression
 
     @classmethod
@@ -1445,34 +1555,31 @@ class ModelSQL(ModelStorage):
         cursor = Transaction().connection.cursor()
         for field_name, ids in zip(field_names, list_ids):
             field = cls._fields[field_name]
-            if (isinstance(field, fields.Many2One)
-                    and field.model_name == cls.__name__
-                    and field.left and field.right):
-                if (values is not None
-                        and (field.left in values or field.right in values)):
-                    raise Exception('ValidateError',
-                        'You can not update fields: "%s", "%s"' %
-                        (field.left, field.right))
+            if (values is not None
+                    and (field.left in values or field.right in values)):
+                raise Exception('ValidateError',
+                    'You can not update fields: "%s", "%s"' %
+                    (field.left, field.right))
 
-                # Nested creation require a rebuild
-                # because initial values are 0
-                # and thus _update_tree can not find the children
-                table = cls.__table__()
-                parent = cls.__table__()
-                cursor.execute(*table.join(parent,
-                        condition=Column(table, field_name) == parent.id
-                        ).select(table.id,
-                        where=(Column(parent, field.left) == 0)
-                        & (Column(parent, field.right) == 0),
-                        limit=1))
-                nested_create = cursor.fetchone()
+            # Nested creation require a rebuild
+            # because initial values are 0
+            # and thus _update_tree can not find the children
+            table = cls.__table__()
+            parent = cls.__table__()
+            cursor.execute(*table.join(parent,
+                    condition=Column(table, field_name) == parent.id
+                    ).select(table.id,
+                    where=(Column(parent, field.left) == 0)
+                    & (Column(parent, field.right) == 0),
+                    limit=1))
+            nested_create = cursor.fetchone()
 
-                if not nested_create and len(ids) < 2:
-                    for id_ in ids:
-                        cls._update_tree(id_, field_name,
-                            field.left, field.right)
-                else:
-                    cls._rebuild_tree(field_name, None, 0)
+            if not nested_create and len(ids) < max(cls.count() / 4, 4):
+                for id_ in ids:
+                    cls._update_tree(id_, field_name,
+                        field.left, field.right)
+            else:
+                cls._rebuild_tree(field_name, None, 0)
 
     @classmethod
     def _rebuild_tree(cls, parent, parent_id, left):
@@ -1640,3 +1747,30 @@ def convert_from(table, tables):
             continue
         table = convert_from(table, sub_tables)
     return table
+
+
+def split_subquery_domain(domain):
+    """
+    Split a domain in two parts:
+        - the first one contains all the sub-domains with only local fields
+        - the second one contains all the sub-domains using a related field
+    The main operator of the domain will be stripped from the results.
+    """
+    local_domains, subquery_domains = [], []
+    for sub_domain in domain:
+        if is_leaf(sub_domain):
+            if '.' in sub_domain[0]:
+                subquery_domains.append(sub_domain)
+            else:
+                local_domains.append(sub_domain)
+        elif (not sub_domain or list(sub_domain) in [['OR'], ['AND']]
+                or sub_domain in ['OR', 'AND']):
+            continue
+        else:
+            sub_ldomains, sub_sqdomains = split_subquery_domain(sub_domain)
+            if sub_sqdomains:
+                subquery_domains.append(sub_domain)
+            else:
+                local_domains.append(sub_domain)
+
+    return local_domains, subquery_domains

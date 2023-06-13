@@ -1,0 +1,14 @@
+* BUG#PROCK-283 Set timeout conf in get_credentials
+* BUG#PROCK-127 Add a timeout for calls to signature service
+* OTH#00000 Update tests to Tryton 6.4
+* FEA#21484 Allow to bypass electronic signature process
+* OTH#00000 Do not crash when trying to retrieve default configuration if none is set on document
+* OTH#00000 Fix an error when migrating to separate credentials
+* FEA#16429 Allow to relaunch electronic signature process
+* BUG#16367 Remove phone number obligation for electronic signature
+* FEA#14763 Allow to call electronic signature provider in two passes
+* OTH#0000 Retrieve credential if not defined on document desc.
+* FEA#14406 Automatically retrieve signed document
+* FEA#12653 Add call back coog entry point
+* BUG#8586 Fix signer data's informations sent to universign
+* FEA#6685 support of url-success, url-fail and url-cancel configuration for Universign callbacks

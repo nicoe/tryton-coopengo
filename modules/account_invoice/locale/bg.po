@@ -897,7 +897,7 @@ msgstr ""
 msgctxt "model:ir.message,text:msg_invoice_same_account_line"
 msgid ""
 "You cannot use the same account \"%(account)s\" on invoice \"%(invoice)s\" "
-"and on line \"%(lines)s\"."
+"and on line \"%(line)s\"."
 msgstr ""
 
 msgctxt "model:ir.message,text:msg_invoice_tax_create"

@@ -6,6 +6,7 @@ import locale
 import decimal
 import gettext
 from decimal import Decimal
+from collections import OrderedDict
 
 from gi.repository import GLib, GObject, Gtk
 
@@ -180,13 +181,19 @@ class DictMultiSelectionEntry(DictEntry):
         selection.set_mode(Gtk.SelectionMode.MULTIPLE)
         selection.connect('changed', self._changed)
         widget.add(self.tree)
+        widget_class(widget, 'multiselection', True)
 
         self.selection = self.definition['selection']
+        width = 10
         if self.definition.get('sort', True):
             self.selection.sort(key=operator.itemgetter(1))
         for value, name in self.selection:
             name = str(name)
             model.append((value, name))
+            width = max(width, len(name))
+
+        widget.set_propagate_natural_width(True)
+        widget.set_propagate_natural_height(True)
 
         name_column = Gtk.TreeViewColumn()
         name_cell = Gtk.CellRendererText()
@@ -206,7 +213,7 @@ class DictMultiSelectionEntry(DictEntry):
         selection.handler_block_by_func(self._changed)
         try:
             selection.unselect_all()
-            for v in value:
+            for v in value or []:
                 if v in value2path:
                     selection.select_path(value2path[v])
         finally:
@@ -234,9 +241,9 @@ class DictIntegerEntry(DictEntry):
         return widget
 
     def get_value(self):
-        if self.widget.value is not None:
-            return int(self.widget.value)
-        return None
+        if self.widget.value is None:
+            return None
+        return int(self.widget.value)
 
     def set_value(self, value):
         if value is not None:
@@ -306,10 +313,8 @@ class DictDateTimeEntry(DictEntry):
         record = self.parent_widget.record
         field = self.parent_widget.field
         if record and field:
-            date_format = field.date_format(record)
-            time_format = field.time_format(record)
-            widget.props.date_format = date_format
-            widget.props.time_format = time_format
+            format_ = field.time_format(record)
+            widget.props.format = format_
         widget.connect('key_press_event', self.parent_widget.send_modified)
         widget.connect('focus-out-event', lambda w, e:
             self.parent_widget._focus_out())
@@ -320,15 +325,6 @@ class DictDateTimeEntry(DictEntry):
 
     def set_value(self, value):
         self.widget.props.value = timezoned_date(value)
-
-    def set_readonly(self, readonly):
-        for child in self.widget.get_children():
-            if isinstance(child, Gtk.Entry):
-                child.set_editable(not readonly)
-                child.set_icon_sensitive(
-                    Gtk.EntryIconPosition.PRIMARY, not readonly)
-            elif isinstance(child, Gtk.ComboBox):
-                child.set_sensitive(not readonly)
 
 
 class DictDateEntry(DictEntry):
@@ -352,11 +348,6 @@ class DictDateEntry(DictEntry):
 
     def set_value(self, value):
         self.widget.props.value = value
-
-    def set_readonly(self, readonly):
-        super().set_readonly(readonly)
-        self.widget.set_icon_sensitive(
-            Gtk.EntryIconPosition.PRIMARY, not readonly)
 
 
 DICT_ENTRIES = {
@@ -382,10 +373,12 @@ class DictWidget(Widget):
         self.rows = {}
 
         self.widget = Gtk.Frame()
-        label = Gtk.Label(label=set_underline(attrs.get('string', '')))
-        label.set_use_underline(True)
-        self.widget.set_label_widget(label)
-        self.widget.set_shadow_type(Gtk.ShadowType.OUT)
+        # FEA#5633 Allow to not display label on group
+        if not attrs.get('no_label', 0.0):
+            label = Gtk.Label(label=set_underline(attrs.get('string', '')))
+            label.set_use_underline(True)
+            self.widget.set_label_widget(label)
+            self.widget.set_shadow_type(Gtk.ShadowType.OUT)
 
         vbox = Gtk.VBox()
         self.widget.add(vbox)
@@ -396,31 +389,37 @@ class DictWidget(Widget):
         hbox = Gtk.HBox()
         hbox.set_border_width(2)
         self.wid_text = Gtk.Entry()
-        self.wid_text.set_placeholder_text(_('Search'))
-        self.wid_text.props.width_chars = 13
-        self.wid_text.connect('activate', self._sig_activate)
-        hbox.pack_start(self.wid_text, expand=True, fill=True, padding=0)
-        label.set_mnemonic_widget(self.wid_text)
+        # JCA: specific
+        no_command = attrs.get('no_command', 0.0)
+        if not no_command:
+            self.wid_text.set_placeholder_text(_('Search'))
+            self.wid_text.props.width_chars = 13
+            self.wid_text.connect('activate', self._sig_activate)
+            hbox.pack_start(self.wid_text, expand=True, fill=True, padding=0)
+            label.set_mnemonic_widget(self.wid_text)
 
-        if int(self.attrs.get('completion', 1)):
-            self.wid_completion = get_completion(search=False, create=False)
-            self.wid_completion.connect('match-selected',
-                self._completion_match_selected)
-            self.wid_text.set_completion(self.wid_completion)
-            self.wid_text.connect('changed', self._update_completion)
-        else:
-            self.wid_completion = None
+            if int(self.attrs.get('completion', 1)):
+                self.wid_completion = get_completion(
+                    search=False, create=False)
+                self.wid_completion.connect('match-selected',
+                    self._completion_match_selected)
+                self.wid_text.set_completion(self.wid_completion)
+                self.wid_text.connect('changed', self._update_completion)
+            else:
+                self.wid_completion = None
 
-        self.but_add = Gtk.Button(can_focus=False)
-        self.but_add.connect('clicked', self._sig_add)
-        self.but_add.add(
-            IconFactory.get_image('tryton-add', Gtk.IconSize.SMALL_TOOLBAR))
-        self.but_add.set_relief(Gtk.ReliefStyle.NONE)
-        hbox.pack_start(self.but_add, expand=False, fill=False, padding=0)
+            self.but_add = Gtk.Button(can_focus=False)
+            self.but_add.connect('clicked', self._sig_add)
+            self.but_add.add(
+                IconFactory.get_image(
+                    'tryton-add', Gtk.IconSize.SMALL_TOOLBAR))
+            self.but_add.set_relief(Gtk.ReliefStyle.NONE)
+            hbox.pack_start(self.but_add, expand=False, fill=False, padding=0)
         vbox.pack_start(hbox, expand=True, fill=True, padding=0)
 
         self.tooltips = Tooltips()
-        self.tooltips.set_tip(self.but_add, _('Add value'))
+        if not no_command:
+            self.tooltips.set_tip(self.but_add, _('Add value'))
         self.tooltips.enable()
 
         self._readonly = False
@@ -471,7 +470,8 @@ class DictWidget(Widget):
 
     def _sig_remove(self, button, key, modified=True):
         del self.fields[key]
-        del self.buttons[key]
+        if not self.attrs.get('no_command', 0.0) and self.buttons.get(key):
+            del self.buttons[key]
         for widget in self.rows[key]:
             self.grid.remove(widget)
             widget.destroy()
@@ -500,13 +500,16 @@ class DictWidget(Widget):
         self._set_button_sensitive()
         for widget in list(self.fields.values()):
             widget.set_readonly(readonly)
-        self.wid_text.set_sensitive(not readonly)
-        self.wid_text.set_editable(not readonly)
+        # JCA: Specific
+        if not self.attrs.get('no_command', 0.0):
+            self.wid_text.set_sensitive(not readonly)
+            self.wid_text.set_editable(not readonly)
 
     def _set_button_sensitive(self):
-        self.but_add.set_sensitive(bool(
-                not self._readonly
-                and self.attrs.get('create', True)))
+        if not self.attrs.get('no_command', 0.0):
+            self.but_add.set_sensitive(bool(
+                    not self._readonly
+                    and self.attrs.get('create', True)))
         for button in self.buttons.values():
             button.set_sensitive(bool(
                     not self._readonly
@@ -530,19 +533,21 @@ class DictWidget(Widget):
         self.grid.attach_next_to(
             hbox, label, Gtk.PositionType.RIGHT, 1, 1)
         hbox.show_all()
-        remove_but = self._new_remove_btn()
-        self.tooltips.set_tip(remove_but, _('Remove "%s"') %
-            key_schema['string'])
-        self.grid.attach_next_to(
-            remove_but, hbox, Gtk.PositionType.RIGHT, 1, 1)
-        remove_but.connect('clicked', self._sig_remove, key)
-        remove_but.show_all()
-        self.rows[key] = [label, hbox, remove_but]
-        self.buttons[key] = remove_but
+        self.rows[key] = [label, hbox]
+
+        if not self.attrs.get('no_command', 0.0):
+            remove_but = self._new_remove_btn()
+            self.tooltips.set_tip(remove_but, _('Remove "%s"') %
+                key_schema['string'])
+            self.grid.attach_next_to(
+                remove_but, hbox, Gtk.PositionType.RIGHT, 1, 1)
+            remove_but.connect('clicked', self._sig_remove, key)
+            remove_but.show_all()
+            self.buttons[key] = remove_but
+            self.rows[key].append(remove_but)
 
     def display(self):
         super(DictWidget, self).display()
-
         if not self.field:
             return
 

@@ -4,6 +4,8 @@
 import datetime
 import time
 import csv
+import logging
+import random
 
 from decimal import Decimal
 from itertools import islice, chain
@@ -23,7 +25,7 @@ from trytond.config import config
 from trytond.i18n import gettext, lazy_gettext
 from trytond.transaction import Transaction
 from trytond.pool import Pool
-from trytond.cache import LRUDict, LRUDictTransaction, freeze
+from trytond.cache import Cache, LRUDict, LRUDictTransaction, freeze
 from trytond.rpc import RPC
 from .modelview import ModelView
 from .descriptors import dualmethod
@@ -31,6 +33,11 @@ from .descriptors import dualmethod
 __all__ = ['ModelStorage', 'EvalEnvironment']
 _cache_record = config.getint('cache', 'record')
 _cache_field = config.getint('cache', 'field')
+_cache_count_timeout = config.getint(
+    'cache', 'count_timeout', default=60 * 60 * 24)
+_cache_count_clear = config.getint(
+    'cache', 'count_clear', default=1000)
+_database_timeout = 120
 
 
 class AccessError(UserError):
@@ -106,6 +113,8 @@ class ModelStorage(Model):
     rec_name = fields.Function(
         fields.Char(lazy_gettext('ir.msg_record_name')), 'get_rec_name',
         searcher='search_rec_name')
+    _count_cache = Cache(
+        'modelstorage.count', duration=_cache_count_timeout, context=False)
 
     @classmethod
     def __setup__(cls):
@@ -120,14 +129,28 @@ class ModelStorage(Model):
                     'delete': RPC(readonly=False, instantiate=0),
                     'copy': RPC(readonly=False, instantiate=0, unique=False,
                         result=lambda r: list(map(int, r))),
-                    'search': RPC(result=lambda r: list(map(int, r))),
-                    'search_count': RPC(),
+                    'search': RPC(
+                        result=lambda r: list(map(int, r)),
+                        timeout=_database_timeout),
+                    'search_count': RPC(timeout=_database_timeout),
                     'search_read': RPC(),
-                    'resources': RPC(instantiate=0, unique=False),
+                    'resources': RPC(instantiate=0, unique=False,
+                        timeout=_database_timeout),
                     'export_data_domain': RPC(),
                     'export_data': RPC(instantiate=0, unique=False),
                     'import_data': RPC(readonly=False),
                     })
+
+    @classmethod
+    def __post_setup__(cls):
+        super().__post_setup__()
+
+        cls._mptt_fields = set()
+        for name, field in cls._fields.items():
+            if (isinstance(field, fields.Many2One)
+                    and field.model_name == cls.__name__
+                    and field.left and field.right):
+                cls._mptt_fields.add(name)
 
     @staticmethod
     def default_create_uid():
@@ -155,6 +178,13 @@ class ModelStorage(Model):
 
         # Increase transaction counter
         Transaction().counter += 1
+
+        count = cls._count_cache.get(cls.__name__)
+        if count is not None:
+            if random.random() < 1 / _cache_count_clear:
+                cls._count_cache.set(cls.__name__, None)
+            else:
+                cls._count_cache.set(cls.__name__, count + len(vlist))
 
     @classmethod
     @without_check_access
@@ -293,6 +323,13 @@ class ModelStorage(Model):
                         if record.id in cache[cls.__name__]:
                             del cache[cls.__name__][record.id]
 
+        count = cls._count_cache.get(cls.__name__)
+        if count is not None:
+            if random.random() < 1 / _cache_count_clear:
+                cls._count_cache.set(cls.__name__, None)
+            else:
+                cls._count_cache.set(cls.__name__, count - len(records))
+
     @classmethod
     @without_check_access
     def trigger_delete(cls, records):
@@ -390,18 +427,20 @@ class ModelStorage(Model):
                 or isinstance(f, fields.MultiValue))
             and n not in mptt]
         ids = list(map(int, records))
-        values = {d['id']: d for d in cls.read(ids, fields_names=fields_names)}
+        datas = cls.read(ids, fields_names=fields_names)
+        datas = dict((d['id'], d) for d in datas)
         field_defs = cls.fields_get(fields_names=fields_names)
         to_create = []
-        for id_ in ids:
-            data = convert_data(field_defs, values[id_])
+        for id in ids:
+            data = convert_data(field_defs, datas[id])
             to_create.append(data)
         new_records = cls.create(to_create)
+        id2new_record = dict(zip(ids, new_records))
 
         fields_translate = {}
         for field_name, field in field_defs.items():
-            if (field_name in cls._fields
-                    and getattr(cls._fields[field_name], 'translate', False)):
+            if field_name in cls._fields and \
+                    getattr(cls._fields[field_name], 'translate', False):
                 fields_translate[field_name] = field
 
         if fields_translate:
@@ -409,19 +448,16 @@ class ModelStorage(Model):
                 ('translatable', '=', True),
                 ])
             if langs:
-                id2new_records = defaultdict(list)
-                for id_, new_record in zip(ids, new_records):
-                    id2new_records[id_].append(new_record)
                 fields_names = list(fields_translate.keys()) + ['id']
                 for lang in langs:
                     # Prevent fuzzing translations when copying as the terms
                     # should be the same.
                     with Transaction().set_context(language=lang.code,
                             fuzzy_translation=False):
-                        values = cls.read(ids, fields_names=fields_names)
+                        datas = cls.read(ids, fields_names=fields_names)
                         to_write = []
-                        for data in values:
-                            to_write.append(id2new_records[data['id']])
+                        for data in datas:
+                            to_write.append([id2new_record[data['id']]])
                             to_write.append(
                                 convert_data(fields_translate, data))
                         cls.write(*to_write)
@@ -482,11 +518,12 @@ class ModelStorage(Model):
         return []
 
     @classmethod
-    def search_count(cls, domain):
+    def search_count(cls, domain, offset=0, limit=None):
         '''
         Return the number of records that match the domain.
         '''
-        res = cls.search(domain, order=[], count=True)
+        res = cls.search(
+            domain, order=[], count=True, offset=offset, limit=limit)
         if isinstance(res, list):
             return len(res)
         return res
@@ -541,6 +578,15 @@ class ModelStorage(Model):
                     domain = ['AND', domain, ('active', '=', True)]
             return domain
         return process(domain)
+
+    @classmethod
+    def count(cls):
+        "Returns the estimation of the number of records."
+        count = cls._count_cache.get(cls.__name__)
+        if count is None:
+            count = cls.search([], count=True)
+            cls._count_cache.set(cls.__name__, count)
+        return count
 
     def resources(self):
         pool = Pool()
@@ -635,7 +681,10 @@ class ModelStorage(Model):
                 if descriptor:
                     value = getattr(field, descriptor)().__get__(value, eModel)
                 else:
-                    value = getattr(value, field_name)
+                    try:
+                        value = getattr(value, field_name)
+                    except AccessError:
+                        value = 'UNAUTHORIZED_401'
                 if isinstance(value, (list, tuple)):
                     first = True
                     child_fields_names = [(x[:i + 1] == fields_tree[:i + 1]
@@ -1187,6 +1236,10 @@ class ModelStorage(Model):
                                 and not value)
                             or (field._type == 'reference'
                                 and not isinstance(value, ModelStorage))):
+                        # JCA : Add log to help debugging
+                        logging.getLogger().debug(
+                            'Field %s of %s is required' %
+                            (field_name, cls.__name__))
                         raise RequiredValidationError(
                             gettext('ir.msg_required_validation_record',
                                 **cls.__names__(field_name)))
@@ -1264,6 +1317,14 @@ class ModelStorage(Model):
                 if hasattr(field, 'selection') and field.selection:
                     if isinstance(field.selection, (tuple, list)):
                         test = set(dict(field.selection).keys())
+                        instance_sel_func = False
+                    else:
+                        sel_func = getattr(cls, field.selection)
+                        instance_sel_func = is_instance_method(
+                            cls, field.selection)
+                        if not instance_sel_func:
+                            test = set(dict(sel_func()))
+
                     for record in records:
                         value = getattr(record, field_name)
                         if field._type == 'reference':
@@ -1271,13 +1332,8 @@ class ModelStorage(Model):
                                 value = value.__class__.__name__
                             elif value:
                                 value, _ = value.split(',')
-                        if not isinstance(field.selection, (tuple, list)):
-                            sel_func = getattr(cls, field.selection)
-                            if not is_instance_method(cls, field.selection):
-                                test = sel_func()
-                            else:
-                                test = sel_func(record)
-                            test = set(dict(test))
+                        if instance_sel_func:
+                            test = set(dict(sel_func(record)))
                         # None and '' are equivalent
                         if '' in test or None in test:
                             test.add('')
@@ -1288,6 +1344,11 @@ class ModelStorage(Model):
                             values = value or []
                         for value in values:
                             if value not in test:
+                                logging.getLogger().debug(
+                                    'Bad Selection : field %s of model %s :'
+                                    ' %s is not in %s' % (
+                                        field_name, cls.__name__, value,
+                                        test))
                                 error_args = cls.__names__(field_name)
                                 error_args['value'] = value
                                 raise SelectionValidationError(gettext(
@@ -1336,7 +1397,7 @@ class ModelStorage(Model):
     def _clean_defaults(cls, defaults):
         pool = Pool()
         vals = {}
-        for field in defaults.keys():
+        for field in list(defaults.keys()):
             if '.' in field:  # skip all related fields
                 continue
             fld_def = cls._fields[field]
@@ -1428,7 +1489,15 @@ class ModelStorage(Model):
         ffields = {
             name: field,
             }
-        if field.loading == 'eager' and not skip_eager:
+        load_eager = field.loading == 'eager' and not skip_eager
+        multiple_getter = None
+        if (field.loading == 'lazy'
+                and isinstance(field, fields.Function)
+                and field.getter_multiple(
+                    getattr(self.__class__, field.getter))):
+            multiple_getter = field.getter
+
+        if load_eager or multiple_getter:
             FieldAccess = Pool().get('ir.model.field.access')
             fread_accesses = {}
             fread_accesses.update(FieldAccess.check(self.__name__,
@@ -1443,8 +1512,11 @@ class ModelStorage(Model):
 
             def to_load(item):
                 fname, field = item
-                return (field.loading == 'eager'
-                    and fname not in to_remove)
+                if fname in to_remove:
+                    return False
+                if multiple_getter:
+                    return getattr(field, 'getter', None) == multiple_getter
+                return field.loading == 'eager'
 
             def overrided(item):
                 fname, field = item
@@ -1460,10 +1532,9 @@ class ModelStorage(Model):
         # add datetime_field
         for field in list(ffields.values()):
             if hasattr(field, 'datetime_field') and field.datetime_field:
+                datetime_field = self._fields[field.datetime_field]
+                ffields[field.datetime_field] = datetime_field
                 require_context_field = True
-                if field.datetime_field not in ffields:
-                    datetime_field = self._fields[field.datetime_field]
-                    ffields[field.datetime_field] = datetime_field
 
         # add depends of field with context
         for field in list(ffields.values()):
@@ -1472,9 +1543,9 @@ class ModelStorage(Model):
                 for context_field_name in eval_fields:
                     if context_field_name not in field.depends:
                         continue
+                    context_field = self._fields.get(context_field_name)
                     require_context_field = True
-                    if context_field_name not in ffields:
-                        context_field = self._fields.get(context_field_name)
+                    if context_field not in ffields:
                         ffields[context_field_name] = context_field
 
         def filter_(id_):
@@ -1496,7 +1567,9 @@ class ModelStorage(Model):
 
         def instantiate(field, value, data):
             if field._type in ('many2one', 'one2one', 'reference'):
-                if value is None or value is False:
+                # ABDC: Fix when data is an empty string, we should return
+                # None
+                if value is None or value is False or value == '':
                     return None
             elif field._type in ('one2many', 'many2many'):
                 if not value:
@@ -1562,7 +1635,6 @@ class ModelStorage(Model):
                 read_data = self.read(list(ids), list(ffields.keys()))
             # create browse records for 'remote' models
             for data in read_data:
-                to_delete = set()
                 for fname, field in ffields.items():
                     fvalue = data[fname]
                     if field._type in ('many2one', 'one2one', 'one2many',
@@ -1581,11 +1653,10 @@ class ModelStorage(Model):
                             or field.context
                             or getattr(field, 'datetime_field', None)
                             or isinstance(field, fields.Function)):
-                        to_delete.add(fname)
+                        del data[fname]
                 if data['id'] not in self._cache:
                     self._cache[data['id']] = {}
-                self._cache[data['id']].update(
-                    **{k: v for k, v in data.items() if k not in to_delete})
+                self._cache[data['id']].update(data)
         return value
 
     @property
@@ -1691,12 +1762,12 @@ class ModelStorage(Model):
                         or context != record._context):
                     latter.append(record)
                     continue
-                save_values[record] = record._save_values
-                values[record] = record._values
+                save_values[id(record)] = record._save_values
+                values[id(record)] = record._values
                 record._values = None
                 if record.id is None or record.id < 0:
                     to_create.append(record)
-                elif save_values[record]:
+                elif save_values[id(record)]:
                     to_write.append(record)
             transaction = Transaction()
             try:
@@ -1705,17 +1776,20 @@ class ModelStorage(Model):
                         transaction.reset_context(), \
                         transaction.set_context(context):
                     if to_create:
-                        news = cls.create([save_values[r] for r in to_create])
+                        # ABE: use records addresses as keys instead of records
+                        news = cls.create(
+                            [save_values[id(r)] for r in to_create])
                         for record, new in zip(to_create, news):
                             record._ids.remove(record.id)
                             record._id = new.id
                             record._ids.append(record.id)
                     if to_write:
                         cls.write(*sum(
-                                (([r], save_values[r]) for r in to_write), ()))
+                                (([r], save_values[id(r)]) for r in to_write),
+                                ()))
             except Exception:
                 for record in to_create + to_write:
-                    record._values = values[record]
+                    record._values = values[id(record)]
                 raise
             for record in to_create + to_write:
                 record._init_values = None

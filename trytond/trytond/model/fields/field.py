@@ -3,14 +3,11 @@
 import warnings
 from functools import wraps
 
-import sql
 from sql import (operators, Column, Literal, Select, CombiningQuery, Null,
     Query, Expression, Cast)
-from sql.aggregate import Min
 from sql.conditionals import Coalesce, NullIf
 from sql.operators import Concat
 
-from trytond import backend
 from trytond.pyson import PYSON, PYSONEncoder, PYSONDecoder, Eval
 from trytond.const import OPERATORS
 from trytond.tools.string_ import StringPartitioned, LazyString
@@ -19,8 +16,6 @@ from trytond.pool import Pool
 from trytond.cache import LRUDictTransaction
 
 from ...rpc import RPC
-
-_sql_version = tuple(map(int, sql.__version__.split('.')))
 
 
 def domain_validate(value):
@@ -93,10 +88,7 @@ def _set_value(record, field):
     if field.startswith('_parent_'):
         field = field[8:]  # Strip '_parent_'
     if not hasattr(record, field):
-        default = None
-        if hasattr(record, '_defaults') and field in record._defaults:
-            default = record._defaults[field]()
-        setattr(record, field, default)
+        setattr(record, field, None)
     elif nested:
         parent = getattr(record, field)
         if parent:
@@ -119,7 +111,9 @@ def depends(*fields, **kwargs):
 
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            for field in fields:
+            # JMO : work around BUG#8723
+            method_depends = getattr(func, 'depends', set())
+            for field in (set(fields) | method_depends):
                 _set_value(self, field)
             return func(self, *args, **kwargs)
         return wrapper
@@ -441,6 +435,7 @@ class Field(object):
             'context': encoder.encode(self.context),
             'loading': self.loading,
             'name': self.name,
+            'depends': self.depends,
             'on_change': list(self.on_change),
             'on_change_with': list(self.on_change_with),
             'readonly': self.readonly,
@@ -496,92 +491,35 @@ class FieldTranslate(Field):
 
     def _get_translation_join(self, Model, name,
             translation, model, table, from_, language):
-        if Model.__name__ == 'ir.model.field':
-            pool = Pool()
-            IrModel = pool.get('ir.model')
-            ModelData = pool.get('ir.model.data')
-            ModelField = pool.get('ir.model.field')
-            Translation = pool.get('ir.translation')
-            model = IrModel.__table__()
-            model_data = ModelData.__table__()
-            model_field = ModelField.__table__()
-            msg_trans = Translation.__table__()
-            if name == 'field_description':
-                type_ = 'field'
-            else:
-                type_ = 'help'
-            translation = translation.select(
-                translation.id.as_('id'),
-                translation.res_id.as_('res_id'),
-                translation.value.as_('value'),
-                translation.name.as_('name'),
-                translation.lang.as_('lang'),
-                translation.type.as_('type'),
-                translation.fuzzy.as_('fuzzy'),
-                )
-            translation |= (msg_trans
-                .join(model_data,
-                    condition=(msg_trans.res_id == model_data.db_id)
-                    & (model_data.model == 'ir.message')
-                    & (msg_trans.name == 'ir.message,text'))
-                .join(model_field,
-                    condition=Concat(
-                        Concat(model_data.module, '.'),
-                        model_data.fs_id) == getattr(model_field, name))
-                .join(model,
-                    condition=model_field.model == model.id)
-                .select(
-                    msg_trans.id.as_('id'),
-                    Literal(-1).as_('res_id'),
-                    msg_trans.value.as_('value'),
-                    Concat(
-                        Concat(model.model, ','),
-                        model_field.name).as_('name'),
-                    msg_trans.lang.as_('lang'),
-                    Literal(type_).as_('type'),
-                    msg_trans.fuzzy.as_('fuzzy'),
-                    ))
-        if backend.name == 'postgresql' and _sql_version >= (1, 1, 0):
-            query = translation.select(
-                translation.res_id.as_('res_id'),
-                translation.value.as_('value'),
-                translation.name.as_('name'),
-                distinct=True,
-                distinct_on=[translation.res_id, translation.name],
-                order_by=[
-                    translation.res_id,
-                    translation.name,
-                    translation.id.desc])
-        else:
-            query = translation.select(
-                translation.res_id.as_('res_id'),
-                Min(translation.value).as_('value'),
-                translation.name.as_('name'),
-                group_by=[translation.res_id, translation.name])
         if Model.__name__ == 'ir.model':
-            name_ = Concat(Concat(table.model, ','), name)
-            type_ = 'model'
-            res_id = -1
+            return from_.join(translation, 'LEFT',
+                condition=(translation.name == Concat(Concat(
+                            table.model, ','), name))
+                & (translation.res_id == -1)
+                & (translation.lang == language)
+                & (translation.type == 'model')
+                & (translation.fuzzy == Literal(False)))
         elif Model.__name__ == 'ir.model.field':
-            from_ = from_.join(model, 'LEFT',
-                condition=model.id == table.model)
-            name_ = Concat(Concat(model.model, ','), table.name)
             if name == 'field_description':
                 type_ = 'field'
             else:
                 type_ = 'help'
-            res_id = -1
+            return from_.join(model, 'LEFT',
+                condition=model.id == table.model).join(
+                    translation, 'LEFT',
+                    condition=(translation.name == Concat(Concat(
+                                model.model, ','), table.name))
+                    & (translation.res_id == -1)
+                    & (translation.lang == language)
+                    & (translation.type == type_)
+                    & (translation.fuzzy == Literal(False)))
         else:
-            name_ = '%s,%s' % (Model.__name__, name)
-            type_ = 'model'
-            res_id = table.id
-        query.where = (
-            (translation.lang == language)
-            & (translation.type == type_)
-            & (translation.fuzzy == Literal(False))
-            )
-        return query, from_.join(query, 'LEFT',
-            condition=(query.res_id == res_id) & (query.name == name_))
+            return from_.join(translation, 'LEFT',
+                condition=(translation.res_id == table.id)
+                & (translation.name == '%s,%s' % (Model.__name__, name))
+                & (translation.lang == language)
+                & (translation.type == 'model')
+                & (translation.fuzzy == Literal(False)))
 
     def convert_domain(self, domain, tables, Model):
         from trytond.ir.lang import get_parent_language
@@ -599,7 +537,7 @@ class FieldTranslate(Field):
         column = None
         while language:
             translation = Translation.__table__()
-            translation, join = self._get_translation_join(
+            join = self._get_translation_join(
                 Model, name, translation, model, table, join, language)
             column = Coalesce(NullIf(column, ''), translation.value)
             language = get_parent_language(language)
@@ -635,7 +573,7 @@ class FieldTranslate(Field):
             if key not in tables:
                 translation = Translation.__table__()
                 model = IrModel.__table__()
-                translation, join = self._get_translation_join(
+                join = self._get_translation_join(
                     Model, name, translation, model, table, table, language)
                 if join.left == table:
                     tables[key] = {
@@ -656,7 +594,7 @@ class FieldTranslate(Field):
             column = Coalesce(NullIf(column, ''), translation.value)
             language = get_parent_language(language)
 
-        return [Coalesce(NullIf(column, ''), self.sql_column(table))]
+        return [Coalesce(column, self.sql_column(table))]
 
     def definition(self, model, language):
         definition = super().definition(model, language)

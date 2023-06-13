@@ -208,7 +208,7 @@ class Lang(DeactivableMixin, ModelSQL, ModelView):
                     ])
         modules = [m.name for m in modules]
         for node in create_graph(modules):
-            load_translations(pool, node, codes)
+            load_translations(pool, node, codes, node.name)
 
     @classmethod
     @ModelView.button
@@ -452,7 +452,6 @@ class Lang(DeactivableMixin, ModelSQL, ModelView):
             if seps:
                 formatted = _strip_padding(formatted, seps)
         elif percent[-1] in 'diu':
-            seps = 0
             if grouping:
                 formatted, seps = self._group(formatted, monetary=monetary)
             if seps:

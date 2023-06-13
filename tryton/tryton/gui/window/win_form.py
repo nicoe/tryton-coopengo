@@ -48,6 +48,7 @@ class WinForm(NoModal, InfoBar):
         self.win.set_deletable(False)
         self.win.connect('delete-event', lambda *a: True)
         self.win.connect('close', self.close)
+        self.win.connect('delete-event', self.delete_event)
         self.win.connect('response', self.response)
 
         self.win.set_default_size(*self.default_size())
@@ -66,12 +67,7 @@ class WinForm(NoModal, InfoBar):
                 label, icon = _("Delete"), 'tryton-delete'
             else:
                 label, icon = _("Cancel"), 'tryton-cancel'
-                record = self.screen.current_record
-                self._initial_value = record.get_on_change_value()
-                if record.parent and record.parent_name in record.group.fields:
-                    parent_field = record.group.fields[record.parent_name]
-                    self._initial_value[record.parent_name] = (
-                        parent_field.get_eval(record))
+                self._initial_value = self.screen.current_record.get_eval()
             self.but_cancel = self.win.add_button(
                 set_underline(label), Gtk.ResponseType.CANCEL)
             self.but_cancel.set_image(common.IconFactory.get_image(
@@ -366,6 +362,10 @@ class WinForm(NoModal, InfoBar):
         self.response(self.win, Gtk.ResponseType.CANCEL)
         return True
 
+    def delete_event(self, widget, event):
+        widget.emit_stop_by_name('delete-event')
+        return True
+
     def response(self, win, response_id):
         validate = False
         cancel_responses = [
@@ -404,17 +404,19 @@ class WinForm(NoModal, InfoBar):
         if (self.screen.current_record
                 and not readonly
                 and response_id in cancel_responses):
-            record = self.screen.current_record
-            added = 'id' in record.modified_fields
             if (self.screen.current_record.id < 0
                     or self.save_current):
-                self.screen.cancel_current(self._initial_value)
-            elif record.modified:
-                record.cancel()
-                record.reload()
-                record.signal('record-changed')
-            if added:
-                record.modified_fields.setdefault('id')
+                if (self.save_current
+                        or common.sur(
+                            _('Are you sure you want to delete this record?')
+                            )):
+                    self.screen.cancel_current(self._initial_value)
+                elif not self.save_current:
+                    return
+            elif self.screen.current_record.modified:
+                self.screen.current_record.cancel()
+                self.screen.current_record.reload()
+                self.screen.current_record.signal('record-changed')
             result = False
         else:
             result = response_id not in cancel_responses

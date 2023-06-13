@@ -106,21 +106,13 @@ class InvoiceLine(metaclass=PoolMeta):
     @fields.depends('origin')
     def _get_tax_rule_pattern(self):
         pool = Pool()
-        try:
-            SaleLine = pool.get('sale.line')
-        except KeyError:
-            SaleLine = None
-        try:
-            PurchaseLine = pool.get('purchase.line')
-        except KeyError:
-            PurchaseLine = None
+        SaleLine = pool.get('sale.line')
+        PurchaseLine = pool.get('purchase.line')
 
         pattern = super(InvoiceLine, self)._get_tax_rule_pattern()
 
         from_country = from_subdivision = to_country = to_subdivision = None
-        if (SaleLine
-                and isinstance(self.origin, SaleLine)
-                and self.origin.id >= 0):
+        if isinstance(self.origin, SaleLine):
             warehouse_address = self.origin.warehouse.address
             if warehouse_address:
                 from_country = warehouse_address.country
@@ -128,9 +120,7 @@ class InvoiceLine(metaclass=PoolMeta):
             shipment_address = self.origin.sale.shipment_address
             to_country = shipment_address.country
             to_subdivision = shipment_address.subdivision
-        elif (PurchaseLine
-                and isinstance(self.origin, PurchaseLine)
-                and self.origin.id >= 0):
+        elif isinstance(self.origin, PurchaseLine):
             invoice_address = self.origin.purchase.invoice_address
             from_country = invoice_address.country
             from_subdivision = invoice_address.subdivision

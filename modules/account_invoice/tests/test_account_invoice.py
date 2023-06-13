@@ -44,52 +44,67 @@ class AccountInvoiceTestCase(ModuleTestCase):
         PaymentTerm = pool.get('account.invoice.payment_term')
 
         cu1 = create_currency('cu1')
-        term, = PaymentTerm.create([{
-                    'name': '30 days, 1 month, 1 month + 15 days',
-                    'lines': [
-                        ('create', [{
-                                    'sequence': 0,
-                                    'type': 'percent',
-                                    'divisor': 4,
-                                    'ratio': Decimal('.25'),
-                                    'relativedeltas': [('create', [{
-                                                    'days': 30,
-                                                    },
-                                                ]),
-                                        ],
-                                    }, {
-                                    'sequence': 1,
-                                    'type': 'percent_on_total',
-                                    'divisor': 4,
-                                    'ratio': Decimal('.25'),
-                                    'relativedeltas': [('create', [{
-                                                    'months': 1,
-                                                    },
-                                                ]),
-                                        ],
-                                    }, {
-                                    'sequence': 2,
-                                    'type': 'fixed',
-                                    'amount': Decimal('396.84'),
-                                    'currency': cu1.id,
-                                    'relativedeltas': [('create', [{
-                                                    'months': 1,
-                                                    'days': 30,
-                                                    },
-                                                ]),
-                                        ],
-                                    }, {
-                                    'sequence': 3,
-                                    'type': 'remainder',
-                                    'relativedeltas': [('create', [{
-                                                    'months': 2,
-                                                    'days': 30,
-                                                    'day': 15,
-                                                    },
-                                                ]),
-                                        ],
-                                    }])]
-                    }])
+        lines = [{
+                'sequence': 0,
+                'type': 'percent',
+                'divisor': 4,
+                'ratio': Decimal('.25'),
+                'relativedeltas': [('create', [{
+                                'days': 30,
+                                },
+                            ]),
+                    ],
+                }, {
+                'sequence': 1,
+                'type': 'percent_on_total',
+                'divisor': 4,
+                'ratio': Decimal('.25'),
+                'relativedeltas': [('create', [{
+                                'months': 1,
+                                },
+                            ]),
+                    ],
+                }, {
+                'sequence': 2,
+                'type': 'fixed',
+                'amount': Decimal('396.84'),
+                'currency': cu1.id,
+                'relativedeltas': [('create', [{
+                                'months': 1,
+                                'days': 30,
+                                },
+                            ]),
+                ]}]
+        to_create = [{
+                'name': '30 days, 1 month, 1 month + 15 days',
+                'lines': [('create', lines)],
+                }]
+
+        # Test without remainder line
+        term, = PaymentTerm.create(to_create)
+        terms = term.compute(Decimal('1587.35'), cu1,
+            date=datetime.date(2011, 10, 1))
+        self.assertEqual(terms, [
+                (datetime.date(2011, 10, 31), Decimal('396.84')),
+                (datetime.date(2011, 11, 1), Decimal('396.84')),
+                (datetime.date(2011, 12, 1), Decimal('396.84')),
+                (datetime.date(2011, 10, 1), Decimal('396.83')),
+                ])
+
+        # Test with remainder line:
+        lines += [{
+                'sequence': 3,
+                'type': 'remainder',
+                'relativedeltas': [('create', [{
+                                'months': 2,
+                                'days': 30,
+                                'day': 15,
+                                },
+                            ]),
+                    ],
+                }]
+
+        term, = PaymentTerm.create(to_create)
         terms = term.compute(Decimal('1587.35'), cu1,
             date=datetime.date(2011, 10, 1))
         self.assertEqual(terms, [
@@ -98,6 +113,7 @@ class AccountInvoiceTestCase(ModuleTestCase):
                 (datetime.date(2011, 12, 1), Decimal('396.84')),
                 (datetime.date(2012, 1, 14), Decimal('396.83')),
                 ])
+
 
     @with_transaction()
     def test_payment_term_with_repeating_decimal(self):

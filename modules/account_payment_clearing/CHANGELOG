@@ -1,8 +1,4 @@
-Version 5.6.2 - 2021-01-01
-* Bug fixes (see mercurial logs for details)
-
-Version 5.6.1 - 2020-11-11
-* Bug fixes (see mercurial logs for details)
+* Decrease amount_line_paid when the clearing line doesn't pay the payment line
 
 Version 5.6.0 - 2020-05-04
 * Bug fixes (see mercurial logs for details)

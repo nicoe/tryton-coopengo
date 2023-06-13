@@ -51,6 +51,9 @@ class Selection(Widget, SelectionMixin, PopdownMixin):
         self.entry.set_button_sensitivity(
             Gtk.SensitivityType.OFF if value else Gtk.SensitivityType.AUTO)
 
+    def _color_widget(self):
+        return self.entry.get_child()
+
     def get_value(self):
         if not self.entry.get_child():  # entry is destroyed
             return
@@ -59,7 +62,10 @@ class Selection(Widget, SelectionMixin, PopdownMixin):
     @property
     def modified(self):
         if self.record and self.field:
-            return self.field.get(self.record) != self.get_value()
+            result = self.field.get(self.record) != self.get_value()
+            if not result:
+                return result
+            return result
         return False
 
     def set_value(self):

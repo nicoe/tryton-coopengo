@@ -213,8 +213,10 @@
                     'class': 'btn btn-default btn-sm',
                     'type': 'button',
                     'aria-label': Sao.i18n.gettext('New')
-                }).append(Sao.common.ICONFACTORY.get_icon_img('tryton-create')
-                ).appendTo(buttons);
+                }).append(jQuery('<span/>', {
+                    // Coog Override Icon
+                    'class': 'glyphicon glyphicon-plus'
+                })).appendTo(buttons);
                 this.but_new.click(disable_during(this.new_.bind(this)));
                 this.but_new.prop('disabled', !access.create || readonly);
 
@@ -235,6 +237,16 @@
                 ).appendTo(buttons);
                 this.but_undel.click(disable_during(this.undelete.bind(this)));
                 this.but_undel.prop('disabled', !access['delete'] || readonly);
+
+                this.but_switch = jQuery('<button/>', {
+                    'class': 'btn btn-default btn-sm',
+                    'type': 'button',
+                    'aria-label': Sao.i18n.gettext('Switch')
+                }).append(jQuery('<span/>', {
+                    // Coog Override Icon
+                    'class': 'glyphicon glyphicon-resize-full'
+                })).appendTo(buttons);
+                this.but_switch.click(this.switch_.bind(this));
 
                 this.screen.message_callback = this.record_label.bind(this);
             }

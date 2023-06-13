@@ -2,6 +2,7 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of this
 # repository contains the full copyright notices and license terms.
 
+import random
 import unittest
 import time
 from unittest.mock import patch, call
@@ -10,6 +11,7 @@ from trytond import backend
 from trytond.exceptions import ConcurrencyException
 from trytond.model.exceptions import (
     RequiredValidationError, SQLConstraintError)
+from trytond.model.modelsql import split_subquery_domain
 from trytond.transaction import Transaction
 from trytond.pool import Pool
 from trytond.tests.test_tryton import activate_module, with_transaction
@@ -45,6 +47,22 @@ class ModelSQLTestCase(unittest.TestCase):
         values = Model.read([record.id], ['name'])
 
         self.assertEqual(values, [{'id': record.id, 'name': "Record"}])
+
+    @with_transaction()
+    def test_read_function_field_bigger_than_cache(self):
+        "Test reading a Function field on a list bigger then the cache size"
+        pool = Pool()
+        Model = pool.get('test.modelsql.read')
+
+        records = Model.create([{'name': str(i)} for i in range(10)])
+        records_created = {m.id: m.name for m in records}
+        record_ids = [r.id for r in records]
+        random.shuffle(record_ids)
+
+        with Transaction().set_context(_record_cache_size=2):
+            records_read = {r['id']: r['rec_name']
+                for r in Model.read(record_ids, ['rec_name'])}
+            self.assertEqual(records_read, records_created)
 
     @with_transaction()
     def test_read_related_2one(self):
@@ -555,32 +573,6 @@ class ModelSQLTranslationTestCase(unittest.TestCase):
 
         Transaction().commit()
 
-    @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-        cls.restore_language()
-
-    @classmethod
-    @with_transaction()
-    def restore_language(cls):
-        pool = Pool()
-        Language = pool.get('ir.lang')
-        Configuration = pool.get('ir.configuration')
-
-        english, = Language.search([('code', '=', 'en')])
-        english.translatable = True
-        english.save()
-
-        config = Configuration(1)
-        config.language = 'en'
-        config.save()
-
-        Language.write(Language.search([('code', '!=', 'en')]), {
-                'translatable': False,
-                })
-
-        Transaction().commit()
-
     @with_transaction()
     def test_create_default_language(self):
         "Test create default language"
@@ -769,87 +761,161 @@ class ModelSQLTranslationTestCase(unittest.TestCase):
         self.assertEqual(other.name, "Baz")
 
     @with_transaction()
-    def test_order_empty_translation(self):
-        "Test order on empty translation value"
+    def test_search_or_to_union(self):
+        """
+        Test searching for 'OR'-ed domain
+        """
         pool = Pool()
-        Model = pool.get('test.modelsql.translation')
-        Translation = pool.get('ir.translation')
+        Model = pool.get('test.modelsql.read')
 
-        with Transaction().set_context(language=self.default_language):
-            records = Model.create(
-                [{'name': "A"}, {'name': "B"}, {'name': "C"}])
+        Model.create([{
+                    'name': 'A',
+                    }, {
+                    'name': 'B',
+                    }, {
+                    'name': 'C',
+                    'targets': [('create', [{
+                                    'name': 'C.A',
+                                    }]),
+                        ],
+                    }])
 
-        translation, = Translation.search([
-                ('lang', '=', self.default_language),
-                ('name', '=', 'test.modelsql.translation,name'),
-                ('type', '=', 'model'),
-                ('res_id', '=', records[1].id),
-                ])
-        translation.value = ''
-        translation.save()
+        domain = ['OR',
+            ('name', 'ilike', '%A%'),
+            ('targets.name', 'ilike', '%A'),
+            ]
+        with patch('trytond.model.modelsql.split_subquery_domain') as no_split:
+            # Mocking in order not to trigger the split
+            no_split.side_effect = lambda d: (d, [])
+            result_without_split = Model.search(domain)
+        self.assertEqual(
+            Model.search(domain),
+            result_without_split)
 
-        with Transaction().set_context(language=self.default_language):
-            self.assertEqual(
-                Model.search([], order=[('name', 'ASC')]),
-                records)
+        domain = ['OR',
+            ('targets.name', 'ilike', '%A'),
+            ]
+        with patch('trytond.model.modelsql.split_subquery_domain') as no_split:
+            # Mocking in order not to trigger the split
+            no_split.side_effect = lambda d: (d, [])
+            result_without_split = Model.search(domain)
+        self.assertEqual(
+            Model.search(domain),
+            result_without_split)
 
     @with_transaction()
-    def test_search_unique_result(self):
-        "Test unique result on search"
+    def test_search_or_to_union_no_local_clauses(self):
+        """
+        Test searching for 'OR'-ed domain without local clauses
+        """
         pool = Pool()
-        Model = pool.get('test.modelsql.translation')
-        Translation = pool.get('ir.translation')
+        Model = pool.get('test.modelsql.read')
 
-        with Transaction().set_context(language=self.default_language):
-            record, = Model.create([{'name': "Foo"}])
-        with Transaction().set_context(language=self.other_language):
-            Model.write([record], {'name': "Bar"})
+        Model.create([{
+                    'name': 'A',
+                    }, {
+                    'name': 'B',
+                    }, {
+                    'name': 'C',
+                    'targets': [('create', [{
+                                    'name': 'C.A',
+                                    }]),
+                        ],
+                    }])
 
-        translation, = Translation.search([
-                ('lang', '=', self.other_language),
-                ('name', '=', 'test.modelsql.translation,name'),
-                ('type', '=', 'model'),
-                ('res_id', '=', record.id),
-                ])
-        Translation.copy([translation], default={'value': "Baz"})
+        domain = ['OR',
+            ('targets.name', 'ilike', '%A'),
+            ]
+        with patch('trytond.model.modelsql.split_subquery_domain') as no_split:
+            # Mocking in order not to trigger the split
+            no_split.side_effect = lambda d: (d, [])
+            result_without_split = Model.search(domain)
+        self.assertEqual(
+            Model.search(domain),
+            result_without_split)
 
-        with Transaction().set_context(language=self.other_language):
-            self.assertEqual(
-                Model.search([('name', 'like', 'Ba%')]),
-                [record])
-            self.assertEqual(
-                Model.search([], order=[('name', 'DESC')]),
-                [record])
-
-    @unittest.skipIf(backend.name != 'postgresql',
-        "Only PostgreSQL support DISTINCT ON")
     @with_transaction()
-    def test_search_last_translation(self):
-        "Test unique result on search"
+    def test_search_limit(self):
+        "Test searching with limit"
         pool = Pool()
-        Model = pool.get('test.modelsql.translation')
-        Translation = pool.get('ir.translation')
+        Model = pool.get('test.modelsql.search')
 
-        with Transaction().set_context(language=self.default_language):
-            record, = Model.create([{'name': "Foo"}])
-        with Transaction().set_context(language=self.other_language):
-            Model.write([record], {'name': "Bar"})
+        Model.create([{'name': str(i)} for i in range(10)])
 
-        translation, = Translation.search([
-                ('lang', '=', self.other_language),
-                ('name', '=', 'test.modelsql.translation,name'),
-                ('type', '=', 'model'),
-                ('res_id', '=', record.id),
+        self.assertEqual(Model.search([], limit=5, count=True), 5)
+        self.assertEqual(Model.search([], limit=20, count=True), 10)
+        self.assertEqual(Model.search([], limit=None, count=True), 10)
+
+    @with_transaction()
+    def test_search_offset(self):
+        "Test searching with offset"
+        pool = Pool()
+        Model = pool.get('test.modelsql.search')
+
+        Model.create([{'name': str(i)} for i in range(10)])
+
+        self.assertEqual(Model.search([], offset=0, count=True), 10)
+        self.assertEqual(Model.search([], offset=5, count=True), 5)
+        self.assertEqual(Model.search([], offset=20, count=True), 0)
+
+    def test_split_subquery_domain_empty(self):
+        """
+        Test the split of domains in local and relation parts (empty domain)
+        """
+        local, related = split_subquery_domain([])
+        self.assertEqual(local, [])
+        self.assertEqual(related, [])
+
+    def test_split_subquery_domain_simple(self):
+        """
+        Test the split of domains in local and relation parts (simple domain)
+        """
+        local, related = split_subquery_domain([('a', '=', 1)])
+        self.assertEqual(local, [('a', '=', 1)])
+        self.assertEqual(related, [])
+
+    def test_split_subquery_domain_dotter(self):
+        """
+        Test the split of domains in local and relation parts (dotted domain)
+        """
+        local, related = split_subquery_domain([('a.b', '=', 1)])
+        self.assertEqual(local, [])
+        self.assertEqual(related, [('a.b', '=', 1)])
+
+    def test_split_subquery_domain_mixed(self):
+        """
+        Test the split of domains in local and relation parts (mixed domains)
+        """
+        local, related = split_subquery_domain(
+            [('a', '=', 1), ('b.c', '=', 2)])
+        self.assertEqual(local, [('a', '=', 1)])
+        self.assertEqual(related, [('b.c', '=', 2)])
+
+    def test_split_subquery_domain_operator(self):
+        """
+        Test the split of domains in local and relation parts (with operator)
+        """
+        local, related = split_subquery_domain(
+            ['OR', ('a', '=', 1), ('b.c', '=', 2)])
+        self.assertEqual(local, [('a', '=', 1)])
+        self.assertEqual(related, [('b.c', '=', 2)])
+
+    def test_split_subquery_domain_nested(self):
+        """
+        Test the split of domains in local and relation parts (nested domains)
+        """
+        local, related = split_subquery_domain(
+            [
+                ['AND', ('a', '=', 1), ('b', '=', 2)],
+                ['AND',
+                    ('b', '=', 2),
+                    ['OR', ('c', '=', 3), ('d.e', '=', 4)]]])
+        self.assertEqual(local, [['AND', ('a', '=', 1), ('b', '=', 2)]])
+        self.assertEqual(related, [
+                ['AND',
+                    ('b', '=', 2),
+                    ['OR', ('c', '=', 3), ('d.e', '=', 4)]]
                 ])
-        Translation.copy([translation], default={'value': "Baz"})
-
-        with Transaction().set_context(language=self.other_language):
-            self.assertEqual(
-                Model.search([('name', '=', 'Baz')]),
-                [record])
-            self.assertEqual(
-                Model.search([('name', '=', 'Bar')]),
-                [])
 
 
 def suite():

@@ -49,8 +49,9 @@ class Dict(Field):
         if isinstance(value, dict):
             d = {}
             for k, v in value.items():
-                if v is None:
-                    continue
+                # JMO : some Coog tests rely on data with all values at None
+                # if v is None:
+                #     continue
                 if isinstance(v, list):
                     v = list(sorted(set(v)))
                 d[k] = v
@@ -192,7 +193,7 @@ class TranslatedDict(object):
             domain = [('type_', '=', 'selection')]
 
         records = []
-        for key_names in grouped_slice(value.keys()):
+        for key_names in grouped_slice(list(value.keys())):
             records += SchemaModel.search([
                     ('name', 'in', key_names),
                     ] + domain)

@@ -12,10 +12,12 @@ from weakref import WeakKeyDictionary
 
 try:
     from pysqlite2 import dbapi2 as sqlite
+    from pysqlite2.dbapi2 import DatabaseError
     from pysqlite2.dbapi2 import IntegrityError as DatabaseIntegrityError
     from pysqlite2.dbapi2 import OperationalError as DatabaseOperationalError
 except ImportError:
     import sqlite3 as sqlite
+    from sqlite3 import DatabaseError
     from sqlite3 import IntegrityError as DatabaseIntegrityError
     from sqlite3 import OperationalError as DatabaseOperationalError
 from sql import Flavor, Table, Query, Expression, Literal, Null
@@ -27,10 +29,16 @@ from trytond.backend.database import DatabaseInterface, SQLType
 from trytond.config import config
 from trytond.transaction import Transaction
 
-__all__ = ['Database', 'DatabaseIntegrityError', 'DatabaseOperationalError']
+
+__all__ = ['Database', 'DatabaseIntegrityError', 'DatabaseOperationalError',
+    'DatabaseTimeoutError']
 logger = logging.getLogger(__name__)
 
 _default_name = config.get('database', 'default_name', default=':memory:')
+
+
+class DatabaseTimeoutError(Exception):
+    pass
 
 
 class SQLiteExtract(Function):
@@ -42,13 +50,13 @@ class SQLiteExtract(Function):
         if date is None:
             return None
         if len(date) == 10:
-            year, month, day = map(int, date.split('-'))
+            year, month, day = list(map(int, date.split('-')))
             date = datetime.date(year, month, day)
         else:
             datepart, timepart = date.split(" ")
-            year, month, day = map(int, datepart.split("-"))
+            year, month, day = list(map(int, datepart.split("-")))
             timepart_full = timepart.split(".")
-            hours, minutes, seconds = map(int, timepart_full[0].split(":"))
+            hours, minutes, seconds = list(map(int, timepart_full[0].split(":")))
             if len(timepart_full) == 2:
                 microseconds = int(timepart_full[1])
             else:
@@ -233,7 +241,12 @@ class SQLiteTrim(Trim):
 
     @property
     def params(self):
-        return [self.string, self.characters]
+        if isinstance(self.string, str):
+            params = [self.string]
+        else:
+            params = list(self.string.params)
+        params.append(self.characters)
+        return params
 
 
 def sign(value):
@@ -314,7 +327,8 @@ class Database(DatabaseInterface):
     _local = threading.local()
     _conn = None
     flavor = Flavor(
-        paramstyle='qmark', function_mapping=MAPPING, null_ordering=False)
+        paramstyle='qmark', function_mapping=MAPPING, null_ordering=False,
+        max_limit=-1)
     IN_MAX = 200
 
     TYPES_MAPPING = {
@@ -333,6 +347,9 @@ class Database(DatabaseInterface):
         super(Database, self).__init__(name=name)
         if name == ':memory:':
             Database._local.memory_database = self
+
+    def _kill_session_query(self, database_name):
+        return 'SELECT 1'
 
     def connect(self):
         if self.name == ':memory:':
@@ -390,7 +407,8 @@ class Database(DatabaseInterface):
         self._conn.execute('PRAGMA foreign_keys = ON')
         return self
 
-    def get_connection(self, autocommit=False, readonly=False):
+    def get_connection(
+            self, autocommit=False, readonly=False, statement_timeout=None):
         if self._conn is None:
             self.connect()
         if autocommit:
@@ -430,6 +448,10 @@ class Database(DatabaseInterface):
             return
         os.remove(os.path.join(config.get('database', 'path'),
             database_name + '.sqlite'))
+
+    def _kill_session_query(self, database_name):
+        # JMO : not necessary
+        return 'select 1'
 
     def list(self, hostname=None):
         res = []

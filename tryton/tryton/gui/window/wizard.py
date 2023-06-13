@@ -63,6 +63,8 @@ class Wizard(InfoBar):
         self.context['active_ids'] = self.ids
         self.context['active_model'] = self.model
         self.context['action_id'] = self.action_id
+        self.context['direct_print'] = self.direct_print
+        self.context['email_print'] = self.email_print
 
         def callback(result):
             try:
@@ -294,7 +296,7 @@ class WizardForm(Wizard, TabContent, SignalEvent):
 
     def set_cursor(self):
         if self.screen:
-            self.screen.set_cursor()
+            self.screen.set_cursor(reset_view=False)
 
 
 class WizardDialog(Wizard, NoModal):
@@ -354,11 +356,6 @@ class WizardDialog(Wizard, NoModal):
             current_view.scroll.set_policy(
                 Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
         self.show()
-        self.scrolledwindow.set_policy(
-            Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        if current_view.scroll:
-            current_view.scroll.set_policy(
-                Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
     def destroy(self, action=None):
         super(WizardDialog, self).destroy(action=action)
@@ -375,11 +372,14 @@ class WizardDialog(Wizard, NoModal):
         else:
             dialog = self.page
         screen = getattr(dialog, 'screen', None)
-        if self.sensible_widget == main.window:
+        # JMO: the conditions added on 'reload' are needed
+        # for https://support.coopengo.com/issues/12986
+        if action != 'reload' and self.sensible_widget == main.window:
             screen = main.menu_screen
         if screen:
             if (screen.current_record
-                    and self.sensible_widget != main.window):
+                    and self.sensible_widget != main.window or
+                    action == 'reload'):
                 if screen.model_name == self.model:
                     ids = self.ids
                 else:

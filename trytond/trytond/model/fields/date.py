@@ -68,9 +68,9 @@ class Timestamp(FormatMixin, Field):
     def sql_format(self, value):
         if isinstance(value, str):
             datepart, timepart = value.split(" ")
-            year, month, day = map(int, datepart.split("-", 2))
+            year, month, day = list(map(int, datepart.split("-", 2)))
             timepart_full = timepart.split(".", 1)
-            hours, minutes, seconds = map(int, timepart_full[0].split(":"))
+            hours, minutes, seconds = list(map(int, timepart_full[0].split(":")))
             if len(timepart_full) == 2:
                 microseconds = int(timepart_full[1])
             else:

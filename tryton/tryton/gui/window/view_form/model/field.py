@@ -5,6 +5,7 @@ from itertools import chain
 import tempfile
 import logging
 import locale
+import logging
 from tryton.common import \
         domain_inversion, eval_domain, localize_domain, \
         merge, inverse_leaf, filter_leaf, prepare_reference_domain, \
@@ -90,6 +91,10 @@ class Field(object):
         if bool(int(state_attrs.get('required') or 0)):
             if (self._is_empty(record)
                     and not bool(int(state_attrs.get('readonly') or 0))):
+                logging.getLogger('root').debug('Field %s required on %s : '
+                    'states : %s'
+                    % (self.name, record.model_name,
+                        str(self.attrs.get('states', {}))))
                 return False
         return True
 
@@ -102,11 +107,17 @@ class Field(object):
         if not softvalidation:
             if not self.check_required(record):
                 invalid = 'required'
+                logging.getLogger('root').debug('Field %s of %s is required' %
+                    (self.name, record.model_name))
         if isinstance(domain, bool):
             if not domain:
                 invalid = 'domain'
+                logging.getLogger('root').debug('Invalid domain on Field %s of'
+                    ' %s : %s' % (self.name, record.model_name, str(domain)))
         elif domain == [('id', '=', None)]:
             invalid = 'domain'
+            logging.getLogger('root').debug('Invalid domain on Field %s of'
+                ' %s : %s' % (self.name, record.model_name, str(domain)))
         else:
             unique, leftpart, value = unique_value(domain)
             if unique:
@@ -118,8 +129,9 @@ class Field(object):
                     # XXX to remove once server domains are fixed
                     value = None
                 setdefault = True
-                if record.group.domain:
-                    original_domain = merge(record.group.domain)
+                group_domain = record.group.get_domain()
+                if group_domain:
+                    original_domain = merge(group_domain)
                 else:
                     original_domain = merge(domain)
                 domain_readonly = original_domain[0] == 'AND'
@@ -137,6 +149,8 @@ class Field(object):
                         domain_readonly)
             if not eval_domain(domain, EvalEnvironment(record)):
                 invalid = domain
+                logging.getLogger('root').debug('Invalid domain on Field %s of'
+                    ' %s : %s' % (self.name, record.model_name, str(domain)))
         self.get_state_attrs(record)['invalid'] = invalid
         return not invalid
 
@@ -203,6 +217,11 @@ class Field(object):
 
 class CharField(Field):
     _default = ''
+
+    def set(self, record, value):
+        super().set(
+            record, value.strip()
+            if value and self.attrs.get('strip') else value)
 
     def get(self, record):
         return super(CharField, self).get(record) or self._default
@@ -529,12 +548,10 @@ class O2MField(Field):
         parent.signal('record-changed')
 
     def _group_list_changed(self, group, signal):
-        if group.model_name == group.parent.model_name:
-            group.parent.group.signal('group-list-changed', signal)
+        group.parent.group.signal('group-list-changed', signal)
 
     def _group_cleared(self, group, signal):
-        if group.model_name == group.parent.model_name:
-            group.parent.signal('group-cleared')
+        group.parent.signal('group-cleared')
 
     def _record_modified(self, group, record):
         if not record.parent:
@@ -662,7 +679,7 @@ class O2MField(Field):
             for old_record in group:
                 if old_record.id not in value:
                     group.remove(old_record, remove=True, signal=False)
-            group.load(value, modified=modified or default)
+            group.load(value, modified=modified)
         else:
             for vals in value:
                 new_record = record.value[self.name].new(default=False)
@@ -726,6 +743,7 @@ class O2MField(Field):
         record.modified_fields.setdefault(self.name)
 
     def set_on_change(self, record, value):
+        record[self.name]
         record.modified_fields.setdefault(self.name)
         self._set_default_value(record)
         if isinstance(value, (list, tuple)):
@@ -770,10 +788,10 @@ class O2MField(Field):
             for vals in value.get('update', []):
                 if 'id' not in vals:
                     continue
+                vals_to_set = {k: v for k, v in vals.items()
+                    if k not in new_fields}
                 record2 = group.get(vals['id'])
                 if record2 is not None:
-                    vals_to_set = {
-                        k: v for k, v in vals.items() if k not in new_fields}
                     record2.set_on_change(vals_to_set)
 
             record.value[self.name].add_fields(new_fields)
@@ -949,11 +967,10 @@ class ReferenceField(Field):
         screen_domain = filter_leaf(screen_domain, self.name, model)
         screen_domain = prepare_reference_domain(screen_domain, self.name)
         return concat(localize_domain(
-                screen_domain, self.name, strip_target=True), attr_domain)
+                screen_domain, strip_target=True), attr_domain)
 
     def get_models(self, record):
         screen_domain, attr_domain = self.domains_get(record)
-        screen_domain = prepare_reference_domain(screen_domain, self.name)
         return extract_reference_models(
             concat(screen_domain, attr_domain), self.name)
 
@@ -1066,16 +1083,9 @@ class DictField(Field):
         for i in range(0, len(keys), batchlen):
             sub_keys = keys[i:i + batchlen]
             try:
-                key_ids = RPCExecute('model', schema_model, 'search',
-                    [('name', 'in', sub_keys), domain], 0,
-                    CONFIG['client.limit'], None, context=context)
-            except RPCException:
-                key_ids = []
-            if not key_ids:
-                continue
-            try:
-                values = RPCExecute('model', schema_model,
-                    'get_keys', key_ids, context=context)
+                values = RPCExecute('model', schema_model, 'search_get_keys',
+                    [('name', 'in', sub_keys), domain], CONFIG['client.limit'],
+                    context=context)
             except RPCException:
                 values = []
             if not values:
@@ -1087,7 +1097,7 @@ class DictField(Field):
         context = self.get_context(record)
         try:
             new_fields = RPCExecute('model', schema_model,
-                'get_keys', key_ids, context=context)
+                'search_get_keys', [('id', 'in', key_ids)], context=context)
         except RPCException:
             new_fields = []
 

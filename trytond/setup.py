@@ -45,7 +45,7 @@ version = get_version()
 major_version, minor_version, _ = version.split('.', 2)
 major_version = int(major_version)
 minor_version = int(minor_version)
-name = 'trytond'
+name = 'Coog'
 
 download_url = 'http://downloads.tryton.org/%s.%s/' % (
     major_version, minor_version)
@@ -54,23 +54,11 @@ if minor_version % 2:
     download_url = 'hg+http://hg.tryton.org/%s#egg=%s-%s' % (
         name, name, version)
 local_version = []
-if os.environ.get('CI_JOB_ID'):
-    local_version.append(os.environ['CI_JOB_ID'])
-else:
-    for build in ['CI_BUILD_NUMBER', 'CI_JOB_NUMBER']:
-        if os.environ.get(build):
-            local_version.append(os.environ[build])
-        else:
-            local_version = []
-            break
+for build in ['CI_BUILD_NUMBER', 'CI_JOB_NUMBER', 'CI_JOB_ID']:
+    if os.environ.get(build):
+        local_version.append(os.environ[build])
 if local_version:
     version += '+' + '.'.join(local_version)
-
-dependency_links = []
-if minor_version % 2:
-    dependency_links.append(
-        'https://trydevpi.tryton.org/?local_version='
-        + '.'.join(local_version))
 
 if platform.python_implementation() == 'PyPy':
     pg_require = ['psycopg2cffi >= 2.5.4']
@@ -159,9 +147,9 @@ setup(name=name,
         'python-dateutil',
         'polib',
         'python-sql >= 0.5',
-        'werkzeug < 2',
+        'werkzeug',
         'wrapt',
-        'passlib >= 1.7.0',
+        'passlib',
         ],
     extras_require={
         'PostgreSQL': pg_require,
@@ -172,7 +160,6 @@ setup(name=name,
         'weasyprint': ['weasyprint'],
         'coroutine': ['gevent>=1.1'],
         },
-    dependency_links=dependency_links,
     zip_safe=False,
     test_suite='trytond.tests',
     test_loader='trytond.test_loader:Loader',

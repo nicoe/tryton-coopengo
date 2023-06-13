@@ -632,9 +632,11 @@
         if (!(selection instanceof Array) &&
                 !(key in this._values2selection)) {
             if (!jQuery.isEmptyObject(this.attributes.selection_change_with)) {
-                prm = this.model.execute(selection, [value]);
+                prm = this.model.execute(
+                    selection, [value], {}, true, false);
             } else {
-                prm = this.model.execute(selection, []);
+                prm = this.model.execute(
+                    selection, [], {}, true, false);
             }
             prm = prm.then(function(selection) {
                 this._values2selection[key] = selection;
@@ -3071,15 +3073,16 @@
         build_dialog: function(message, title, prm) {
             var dialog = Sao.common.UserWarningDialog._super.build_dialog.call(
                 this, message, title, prm);
-            var always = jQuery('<input/>', {
-                'type': 'checkbox'
-            });
-            dialog.body.append(jQuery('<div/>', {
-                'class': 'checkbox',
-            }).append(jQuery('<label/>')
-                .append(always)
-                .text(Sao.i18n.gettext('Always ignore this warning.')))
-            );
+            // Coog specific : do not display this warning cf bug #9035
+            // var always = jQuery('<input/>', {
+            //     'type': 'checkbox'
+            // });
+            // dialog.body.append(jQuery('<div/>', {
+            //     'class': 'checkbox',
+            // }).append(jQuery('<label/>')
+            //     .append(always)
+            //     .append(Sao.i18n.gettext('Always ignore this warning.')))
+            // );
             dialog.body.append(jQuery('<p/>')
                     .text(Sao.i18n.gettext('Do you want to proceed?')));
             dialog.footer.empty();
@@ -3095,9 +3098,10 @@
                 'type': 'button'
             }).text(Sao.i18n.gettext('Yes')).click(function() {
                 this.close(dialog);
-                if (always.prop('checked')) {
-                    prm.resolve('always');
-                }
+                // Coog specific : always is not displayed cf bug #9035
+                // if (always.prop('checked')) {
+                //     prm.resolve('always');
+                // }
                 prm.resolve('ok');
             }.bind(this)).appendTo(dialog.footer);
             return dialog;
@@ -3565,7 +3569,8 @@
         var order = field.get_search_order(record);
         var sao_model = new Sao.Model(model);
         return sao_model.execute('search_read',
-                [domain, 0, Sao.config.limit, order, ['rec_name']], context);
+                [domain, 0, Sao.config.limit, order, ['rec_name']], context,
+                undefined, false);
     };
 
     Sao.common.Paned = Sao.class_(Object, {
@@ -3762,6 +3767,16 @@
                 var v = c == 'x' ? r : (r & 0x3 | 0x8);
                 return v.toString(16);
             });
+    };
+
+    Sao.common.clone = function(obj) {
+        var copy = obj.constructor();
+        for (var attr in obj) {
+            if (obj.hasOwnProperty(attr)) {
+                copy[attr] = obj[attr];
+            }
+        }
+        return copy;
     };
 
 }());

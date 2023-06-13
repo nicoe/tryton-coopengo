@@ -2,6 +2,7 @@
 # this repository contains the full copyright notices and license terms.
 import gettext
 import datetime
+import re
 
 from gi.repository import Gdk, GObject, Gtk
 
@@ -13,14 +14,6 @@ from .common import IconFactory
 __all__ = ['Date', 'CellRendererDate', 'Time', 'CellRendererTime', 'DateTime']
 
 _ = gettext.gettext
-
-
-def _fix_format(format_):
-    if '%Y' in format_:
-        if (datetime.date.min.strftime('%Y') != '0001'
-                and datetime.date.min.strftime('%4Y') == '0001'):
-            format_ = format_.replace('%Y', '%4Y')
-    return format_
 
 
 def date_parse(text, format_='%x'):
@@ -38,7 +31,22 @@ def date_parse(text, format_='%x'):
     except ValueError:
         monthfirst = False
     yearfirst = not dayfirst and not monthfirst
-    return parse(text, dayfirst=dayfirst, yearfirst=yearfirst, ignoretz=True)
+    text = re.sub('/+', '/', text)
+    if len(text) == 6 and re.search('[0-9]{6}', text):
+        text = '%s/%s/%s' % (text[:2], text[2:4], text[4:6])
+    elif len(text) == 8 and re.search('[0-9]{8}', text):
+        if yearfirst:
+            text = '%s/%s/%s' % (text[:4], text[4:6], text[6:8])
+        else:
+            text = '%s/%s/%s' % (text[:2], text[2:4], text[4:8])
+    elif text.endswith('/'):
+        text = text.strip('/')
+    # Try catch below avoid client crash when the parse method fails
+    try:
+        return parse(text, dayfirst=dayfirst, yearfirst=yearfirst,
+            ignoretz=True)
+    except Exception:
+        return datetime.datetime.now()
 
 
 class Date(Gtk.Entry):
@@ -199,7 +207,7 @@ class Date(Gtk.Entry):
             self.update_label()
             self.emit('date-changed')
         elif prop.name == 'format':
-            self.__format = _fix_format(value)
+            self.__format = value
             self.update_label()
 
     def do_get_property(self, prop):
@@ -230,7 +238,7 @@ class CellRendererDate(Gtk.CellRendererText):
 
     def do_set_property(self, prop, value):
         if prop.name == 'format':
-            self.__format = _fix_format(value)
+            self.__format = value
             return
         Gtk.CellRendererText.set_property(self, prop, value)
 
@@ -370,7 +378,7 @@ class Time(Gtk.ComboBox):
             self.update_label()
             self.emit('time-changed')
         elif prop.name == 'format':
-            self.__format = _fix_format(value)
+            self.__format = value
             self.update_label()
             self.update_model()
 
@@ -402,7 +410,7 @@ class CellRendererTime(Gtk.CellRendererCombo):
 
     def do_set_property(self, prop, value):
         if prop.name == 'format':
-            self.__format = _fix_format(value)
+            self.__format = value
             return
         Gtk.CellRendererText.set_property(self, prop, value)
 

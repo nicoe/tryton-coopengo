@@ -64,6 +64,12 @@ class Currency(DeactivableMixin, ModelSQL, ModelView):
                 'p_sign_posn', 'n_sign_posn']:
             table_h.not_null_action(col, 'remove')
 
+        # Migration from coog-2.8: Keep a reference on the euro
+        cursor.execute(*data.update(
+                [data.module],
+                ['currency_cog'],
+                where=(data.module == 'currency') & (data.fs_id == 'eur')
+                ))
         # Migration from 5.2: remove country data
         cursor.execute(*data.delete(where=(data.module == 'currency')
                 & (data.model == cls.__name__)))
@@ -129,12 +135,12 @@ class Currency(DeactivableMixin, ModelSQL, ModelView):
                 res[currency.id] = rates[0].id
             else:
                 res[currency.id] = 0
-        rate_ids = [x for x in res.values() if x]
+        rate_ids = [x for x in list(res.values()) if x]
         rates = Rate.browse(rate_ids)
         id2rate = {}
         for rate in rates:
             id2rate[rate.id] = rate
-        for currency_id in res.keys():
+        for currency_id in list(res.keys()):
             if res[currency_id]:
                 res[currency_id] = id2rate[res[currency_id]].rate
         return res
@@ -145,8 +151,6 @@ class Currency(DeactivableMixin, ModelSQL, ModelView):
 
     @classmethod
     def _round(cls, amount, factor, rounding):
-        if not factor:
-            return amount
         with localcontext() as ctx:
             ctx.prec = max(ctx.prec, (amount / factor).adjusted() + 1)
             # Divide and multiple by factor for case factor is not 10En
@@ -156,9 +160,7 @@ class Currency(DeactivableMixin, ModelSQL, ModelView):
 
     def is_zero(self, amount):
         'Return True if the amount can be considered as zero for the currency'
-        if not self.rounding:
-            return not amount
-        return abs(self.round(amount)) < abs(self.rounding)
+        return abs(self.round(amount)) < self.rounding
 
     @classmethod
     def compute(cls, from_currency, amount, to_currency, round=True):

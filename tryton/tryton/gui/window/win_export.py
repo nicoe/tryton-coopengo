@@ -154,11 +154,14 @@ class WinExport(WinCSV):
 
             for name, field, string_ in items:
                 path = prefix_field + name
+                long_string = string_
+                if prefix_field:
+                    long_string = prefix_name + string_
                 node = self.model1.insert(parent_node, 0,
                     [string_, path])
-                string_ = prefix_name + string_
 
-                self.fields[path] = (string_, field.get('relation'))
+                self.fields[path] = (string_, long_string,
+                    field.get('relation'))
                 # Insert relation only to real field
                 if '.' not in name:
                     if field.get('relation'):
@@ -175,7 +178,7 @@ class WinExport(WinCSV):
         child = self.model1.iter_children(iter)
         if self.model1.get_value(child, 0) is None:
             prefix_field = self.model1.get_value(iter, 1)
-            string_, relation = self.fields[prefix_field]
+            string_, long_string, relation = self.fields[prefix_field]
             self.model_populate(self._get_fields(relation), iter,
                 prefix_field + '/', string_ + '/')
             self.model1.remove(child)
@@ -303,10 +306,10 @@ class WinExport(WinCSV):
             self.sel_field(name)
 
     def sel_field(self, name):
-        string_, relation = self.fields[name]
+        _, long_string, relation = self.fields[name]
         if relation:
             name += '/rec_name'
-        self.model2.append((string_, name))
+        self.model2.append((long_string, name))
 
     def response(self, dialog, response):
         if response == Gtk.ResponseType.OK:
@@ -356,13 +359,13 @@ class WinExport(WinCSV):
         self.destroy()
 
     def export_csv(self, fname, fields, data, popup=True):
-        encoding = self.csv_enc.get_active_text() or 'UTF-8'
+        encoding = self.csv_enc.get_active_text() or 'utf_8_sig'
         locale_format = self.csv_locale.get_active()
 
         try:
+            file_obj = open(fname, 'w', encoding=encoding, newline='')
             writer = csv.writer(
-                open(fname, 'w', encoding=encoding, newline=''),
-                quotechar=self.get_quotechar(),
+                file_obj, quotechar=self.get_quotechar(),
                 delimiter=self.get_delimiter())
             if self.add_field_names.get_active():
                 writer.writerow(fields)
@@ -410,7 +413,7 @@ class WinExport(WinCSV):
             return True
 
     def export_keypress(self, treeview, event):
-        if event.keyval not in [Gdk.KEY_Return, Gdk.KEY_.space]:
+        if event.keyval not in [Gdk.KEY_Return, Gdk.KEY_space]:
             return
         model, selected = treeview.get_selection().get_selected()
         if not selected:

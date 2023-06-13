@@ -5,6 +5,7 @@ import http.client
 import logging
 import pydoc
 import time
+import traceback
 try:
     from http import HTTPStatus
 except ImportError:
@@ -18,21 +19,77 @@ from trytond import security
 from trytond import backend
 from trytond.config import config, get_hostname
 from trytond import __version__
+from trytond.tools.logging import format_args
 from trytond.transaction import Transaction
 from trytond.exceptions import (
     UserError, UserWarning, ConcurrencyException, LoginException,
-    RateLimitException)
+    RateLimitException, TimeoutException)
 from trytond.tools import is_instance_method
 from trytond.wsgi import app
+from trytond.perf_analyzer import PerfLog, profile
+from trytond.perf_analyzer import logger as perf_logger
+from trytond.error_handling import error_wrap
 from trytond.worker import run_task
 from .wrappers import with_pool
 
 logger = logging.getLogger(__name__)
 
+# JCA: log slow RPC (> log_time_threshold)
+slow_threshold = config.getfloat('web', 'log_time_threshold', default=-1)
+if slow_threshold >= 0:
+    slow_logger = logging.getLogger('trytond.rpc.performance')
+
+# JCA: Format json logs
+format_json_parameters = config.getboolean('web', 'format_parameters_logs',
+    default=False)
+format_json_result = config.getboolean('web', 'format_result_logs',
+    default=False)
+if format_json_parameters or format_json_result:
+    import datetime
+    import base64
+    import json
+    from decimal import Decimal
+
+    class DEBUGEncoder(json.JSONEncoder):
+
+        serializers = {}
+
+        @classmethod
+        def register(cls, klass, encoder):
+            assert klass not in cls.serializers
+            cls.serializers[klass] = encoder
+
+        def default(self, obj):
+            marshaller = self.serializers.get(type(obj),
+                super(DEBUGEncoder, self).default)
+            return marshaller(obj)
+
+    DEBUGEncoder.register(datetime.datetime,
+        lambda x: 'DateTime(%s-%s-%s %s:%s:%s.%s)' % (x.year, x.month, x.day,
+            x.hour, x.minute, x.second, x.microsecond))
+    DEBUGEncoder.register(datetime.date, lambda x: 'Date(%s-%s-%s)' % (
+            x.year, x.month, x.day))
+    DEBUGEncoder.register(datetime.time, lambda x: 'Time(%s:%s:%s.%s)' % (
+            x.hour, x.minute, x.second, x.microsecond))
+    DEBUGEncoder.register(datetime.timedelta, lambda x: 'TimeDelta(%s seconds)' % (
+            x.total_seconds()))
+    DEBUGEncoder.register(Decimal, lambda x: 'Decimal(%s)' % str(x))
+    DEBUGEncoder.register(bytes, lambda x: 'Bytes(%s)' % base64.encodebytes(x))
+    DEBUGEncoder.register(bytearray,
+        lambda x: 'Bytes(%s)' % base64.encodebytes(x))
+
+
 ir_configuration = Table('ir_configuration')
 ir_lang = Table('ir_lang')
 ir_module = Table('ir_module')
 res_user = Table('res_user')
+
+# JCA: log slow RPC
+def log_exception(method, *args, **kwargs):
+    kwargs['exc_info'] = False
+    method(*args, **kwargs)
+    for elem in traceback.format_exc().split('\n'):
+        method(elem)
 
 
 @app.route('/<string:database_name>/', methods=['POST'])
@@ -137,9 +194,18 @@ def help_method(request, pool):
     return pydoc.getdoc(getattr(obj, method))
 
 
+# AKE: hide tech exceptions and send them to sentry
+@error_wrap
 @app.auth_required
 @with_pool
 def _dispatch(request, pool, *args, **kwargs):
+
+    # AKE: perf analyzer hooks
+    try:
+        PerfLog().on_enter()
+    except Exception:
+        perf_logger.exception('on_enter failed')
+
     obj, method = get_object_method(request, pool)
     if method in obj.__rpc__:
         rpc = obj.__rpc__[method]
@@ -157,25 +223,73 @@ def _dispatch(request, pool, *args, **kwargs):
                 pool.database_name, user, session, context=context):
             abort(http.client.UNAUTHORIZED)
 
-    log_message = '%s.%s(*%s, **%s) from %s@%s/%s'
+    log_message = '%s.%s%s from %s@%s%s'
     username = request.authorization.username
     if isinstance(username, bytes):
         username = username.decode('utf-8')
     log_args = (
-        obj, method, args, kwargs, username, request.remote_addr, request.path)
+        obj, method,
+        format_args(args, kwargs, logger.isEnabledFor(logging.DEBUG)),
+        username, request.remote_addr, request.path)
     logger.info(log_message, *log_args)
+
+    # JCA: log slow RPC
+    if slow_threshold >= 0:
+        slow_msg = '%s.%s (%s s)'
+        slow_args = (obj, method)
+        slow_start = time.time()
+
+    # JCA: Format parameters
+    if format_json_parameters and logger.isEnabledFor(logging.DEBUG):
+        try:
+            for line in json.dumps(args, indent=2, sort_keys=True,
+                    cls=DEBUGEncoder).split('\n'):
+                logger.debug('Parameters: %s' % line)
+        except Exception:
+            logger.debug('Could not format parameters in log', exc_info=True)
+
+    user = request.user_id
+
+    # AKE: add session and token to transaction context
+    token = None
+    if request.authorization.type == 'token':
+        token = {
+            'key': request.authorization.get('token'),
+            'user': user,
+            'party': request.authorization.get('party_id'),
+            }
+
+    # AKE: perf analyzer hooks
+    try:
+        PerfLog().on_execute(user, session, request.rpc_method, args, kwargs)
+    except Exception:
+        perf_logger.exception('on_execute failed')
 
     retry = config.getint('database', 'retry')
     for count in range(retry, -1, -1):
         if count != retry:
             time.sleep(0.02 * (retry - count))
         with Transaction().start(pool.database_name, user,
-                readonly=rpc.readonly) as transaction:
+                readonly=rpc.readonly, timeout=rpc.timeout) as transaction:
             try:
                 c_args, c_kwargs, transaction.context, transaction.timestamp \
                     = rpc.convert(obj, *args, **kwargs)
+                # AKE: add session to transaction context
+                transaction.context.update({
+                        'session': session,
+                        'token': token,
+                        })
                 transaction.context['_request'] = request.context
                 meth = getattr(obj, method)
+
+                # AKE: perf analyzer hooks
+                try:
+                    wrapped_meth = profile(meth)
+                except Exception:
+                    perf_logger.exception('profile failed')
+                else:
+                    meth = wrapped_meth
+
                 if (rpc.instantiate is None
                         or not is_instance_method(obj, method)):
                     result = rpc.result(meth(*c_args, **c_kwargs))
@@ -187,18 +301,39 @@ def _dispatch(request, pool, *args, **kwargs):
                     else:
                         result = [rpc.result(meth(i, *c_args, **c_kwargs))
                             for i in inst]
+            except backend.DatabaseTimeoutError as exception:
+                logger.debug(log_message, *log_args, exc_info=True)
+                raise TimeoutException from exception
             except backend.DatabaseOperationalError:
                 if count and not rpc.readonly:
                     transaction.rollback()
                     continue
                 logger.error(log_message, *log_args, exc_info=True)
+
+                # JCA: log slow RPC
+                if slow_threshold >= 0:
+                    slow_args += (str(time.time() - slow_start),)
+                    log_exception(slow_logger.error, slow_msg, *slow_args)
+
                 raise
             except (ConcurrencyException, UserError, UserWarning,
                     LoginException):
                 logger.debug(log_message, *log_args, exc_info=True)
+
+                # JCA: log slow RPC
+                if slow_threshold >= 0:
+                    slow_args += (str(time.time() - slow_start),)
+                    log_exception(slow_logger.debug, slow_msg, *slow_args)
+
                 raise
             except Exception:
                 logger.error(log_message, *log_args, exc_info=True)
+
+                # JCA: log slow RPC
+                if slow_threshold >= 0:
+                    slow_args += (str(time.time() - slow_start),)
+                    log_exception(slow_logger.error, slow_msg, *slow_args)
+
                 raise
             # Need to commit to unlock SQLite database
             transaction.commit()
@@ -208,7 +343,34 @@ def _dispatch(request, pool, *args, **kwargs):
         if session:
             context = {'_request': request.context}
             security.reset(pool.database_name, session, context=context)
-        logger.debug('Result: %s', result)
+
+        # JCA: Allow to format json result
+        if format_json_result and logger.isEnabledFor(logging.DEBUG):
+            try:
+                for line in json.dumps(result, indent=2,
+                        sort_keys=True, cls=DEBUGEncoder).split('\n'):
+                    logger.debug('Result: %s' % line)
+            except Exception:
+                logger.debug('Could not format parameters in log',
+                    exc_info=True)
+        else:
+            logger.debug('Result: %s', result)
+
+        # JCA: log slow RPC
+        if slow_threshold >= 0:
+            slow_diff = time.time() - slow_start
+            slow_args += (str(slow_diff),)
+            if slow_diff > slow_threshold:
+                slow_logger.info(slow_msg, *slow_args)
+            else:
+                slow_logger.debug(slow_msg, *slow_args)
+
+        # AKE: perf analyzer hooks
+        try:
+            PerfLog().on_leave(result)
+        except Exception:
+            perf_logger.exception('on_leave failed')
+
         response = app.make_response(request, result)
         if rpc.readonly and rpc.cache:
             response.headers.extend(rpc.cache.headers())

@@ -5,6 +5,7 @@ from sql import For
 
 DatabaseIntegrityError = None
 DatabaseOperationalError = None
+DatabaseTimeoutError = None
 
 SQLType = namedtuple('SQLType', 'base type')
 
@@ -22,6 +23,9 @@ class DatabaseInterface(object):
     def __init__(self, name=''):
         self.name = name
 
+    def _kill_session_query(self, database_name):
+        raise NotImplementedError
+
     def connect(self):
         '''
         Connect to the database
@@ -30,11 +34,14 @@ class DatabaseInterface(object):
         '''
         raise NotImplementedError
 
-    def get_connection(self, autocommit, readonly=False):
+    def get_connection(
+            self, autocommit, readonly=False, statement_timeout=None):
         '''Retrieve a connection on the database
 
         :param autocommit: a boolean to activate autocommit
         :param readonly: a boolean to specify if the transaction is readonly
+        :param statement_timeout: an integer to specify in seconds the timeout
+                                  applied on each statement
         '''
         raise NotImplementedError
 
@@ -42,6 +49,13 @@ class DatabaseInterface(object):
         '''Release the connection
 
         :param close: if close is True the connection is discarded
+        '''
+        raise NotImplementedError
+
+    def reset_connection(self, connection, commit):
+        '''Reset the connection session
+
+        :param: commit: if commit is True the connection will be commited
         '''
         raise NotImplementedError
 

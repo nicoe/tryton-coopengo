@@ -1,5 +1,6 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
+from decimal import Decimal
 from itertools import groupby
 
 from trytond.i18n import gettext
@@ -192,6 +193,16 @@ class Payment(Workflow, ModelSQL, ModelView):
             ('failed', 'Failed'),
             ], 'State', readonly=True, select=True)
 
+    @property
+    def amount_line_paid(self):
+        if self.state != 'failed':
+            if self.line.second_currency:
+                payment_amount = abs(self.line.amount_second_currency)
+            else:
+                payment_amount = abs(self.line.credit - self.line.debit)
+            return max(min(self.amount, payment_amount), 0)
+        return Decimal(0)
+
     @classmethod
     def __setup__(cls):
         super(Payment, cls).__setup__()
@@ -313,15 +324,6 @@ class Payment(Workflow, ModelSQL, ModelView):
         return Journal.fields_get([field_name])[field_name]['selection']
 
     @classmethod
-    def copy(cls, payments, default=None):
-        if default is None:
-            default = {}
-        else:
-            default = default.copy()
-        default.setdefault('group', None)
-        return super().copy(payments, default=default)
-
-    @classmethod
     def delete(cls, payments):
         for payment in payments:
             if payment.state != 'draft':
@@ -423,3 +425,6 @@ class ProcessPayment(Wizard):
         return action, {
             'res_id': [g.id for g in groups],
             }
+
+    def default_start(self, name):
+        return {}

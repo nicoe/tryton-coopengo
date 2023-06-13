@@ -177,6 +177,7 @@ class RichTextBox(TextBox):
         super(RichTextBox, self)._readonly_set(value)
         if self.toolbar:
             self.toolbar.set_sensitive(not value)
+            self.toolbar.set_visible(not value)
 
     def detect_style(self, textview, *args):
         if not self.toolbar:

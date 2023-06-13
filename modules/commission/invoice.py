@@ -50,51 +50,71 @@ class Invoice(metaclass=PoolMeta):
     @classmethod
     @Workflow.transition('paid')
     def paid(cls, invoices):
+        super(Invoice, cls).paid(invoices)
+        if invoices:
+            cls._set_paid_commissions_dates(invoices)
+
+    @classmethod
+    def _set_paid_commissions_dates(cls, invoices):
         pool = Pool()
         Date = pool.get('ir.date')
         Commission = pool.get('commission')
+        InvoiceLine = pool.get('account.invoice.line')
 
         today = Date.today()
-
-        super(Invoice, cls).paid(invoices)
 
         for sub_invoices in grouped_slice(invoices):
             ids = [i.id for i in sub_invoices]
             commissions = Commission.search([
                     ('date', '=', None),
-                    ('origin.invoice', 'in', ids, 'account.invoice.line'),
+                    ('origin', 'in', [str(x) for x in InvoiceLine.search(
+                                [('invoice', 'in', ids)])]),
                     ])
             Commission.write(commissions, {
                     'date': today,
-                    })
+            })
+
+    @classmethod
+    def _get_commissions_to_delete(cls, ids):
+        # Declared to be overloaded for performances improvements
+        # We should improve or overload the field `reference`
+        Commission = Pool().get('commission')
+        return Commission.search([
+                ('invoice_line', '=', None),
+                ('origin.invoice', 'in', ids, 'account.invoice.line'),
+                ])
+
+    @classmethod
+    def _get_commissions_to_cancel(cls, ids):
+        # Declared to be overloaded for performances improvements
+        # We should improve or overload the field `reference`
+        Commission = Pool().get('commission')
+        return Commission.search([
+                ('invoice_line', '!=', None),
+                ('origin.invoice', 'in', ids, 'account.invoice.line'),
+                ])
 
     @classmethod
     @ModelView.button
     @Workflow.transition('cancel')
     def cancel(cls, invoices):
+        # Because domain resolution of the field `reference` creates
+        # a non-optimized query: we temporary created two function to be
+        # overloaded
+        # Issue: 2913
         pool = Pool()
         Commission = pool.get('commission')
 
         super(Invoice, cls).cancel(invoices)
 
         to_delete = []
-        to_save = []
         for sub_invoices in grouped_slice(invoices):
             ids = [i.id for i in sub_invoices]
-            to_delete += Commission.search([
-                    ('invoice_line', '=', None),
-                    ('origin.invoice', 'in', ids, 'account.invoice.line'),
-                    ])
-            to_cancel = Commission.search([
-                    ('invoice_line', '!=', None),
-                    ('origin.invoice', 'in', ids, 'account.invoice.line'),
-                    ])
-            for commission in Commission.copy(to_cancel):
-                commission.amount *= -1
-                to_save.append(commission)
+            to_delete += cls._get_commissions_to_delete(ids)
+            to_cancel = cls._get_commissions_to_cancel(ids)
+            Commission.cancel(to_cancel)
 
         Commission.delete(to_delete)
-        Commission.save(to_save)
 
     def _credit(self, **values):
         values.setdefault('agent', self.agent)
@@ -162,9 +182,6 @@ class InvoiceLine(metaclass=PoolMeta):
             commission = Commission()
             commission.origin = self
             if plan.commission_method == 'posting':
-                commission.date = today
-            elif (plan.commission_method == 'payment'
-                    and self.invoice.state == 'paid'):
                 commission.date = today
             commission.agent = agent
             commission.product = plan.commission_product

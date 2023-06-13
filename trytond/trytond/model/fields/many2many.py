@@ -453,10 +453,7 @@ class Many2Many(Field):
             relation_domain, tables=relation_tables)
         query_table = convert_from(None, relation_tables)
         query = query_table.select(origin, where=expression)
-        expression = table.id.in_(query)
-        if operator.startswith('!') or operator.startswith('not '):
-            expression |= ~table.id.in_(relation.select(origin))
-        return expression
+        return table.id.in_(query)
 
     def definition(self, model, language):
         encoder = PYSONEncoder()
@@ -471,8 +468,8 @@ class Many2Many(Field):
         definition['search_context'] = encoder.encode(self.search_context)
         definition['search_order'] = encoder.encode(self.search_order)
         definition['sortable'] &= hasattr(model, 'order_' + self.name)
-        definition['order'] = (
-            getattr(self.get_target(), '_order', None)
+        definition['order'] = encoder.encode(
+            getattr(model, '_order', None)
             if self.order is None else self.order)
         if self.size is not None:
             definition['size'] = encoder.encode(self.size)

@@ -64,6 +64,10 @@ Post customer invoice::
     >>> invoice.click('post')
     >>> invoice.state
     'posted'
+    >>> invoice.amount_to_pay
+    Decimal('10.00')
+    >>> [l.delegated_amount for l in invoice.lines_to_pay]
+    [Decimal('10.00')]
 
 Post supplier invoice::
 
@@ -77,6 +81,10 @@ Post supplier invoice::
     >>> supplier_invoice.click('post')
     >>> supplier_invoice.state
     'posted'
+    >>> supplier_invoice.amount_to_pay
+    Decimal('5.00')
+    >>> [l.delegated_amount for l in supplier_invoice.lines_to_pay]
+    [Decimal('-5.00')]
 
 Group lines::
 
@@ -94,6 +102,14 @@ Group lines::
     >>> supplier_invoice.reload()
     >>> supplier_invoice.state
     'posted'
+    >>> invoice.amount_to_pay
+    Decimal('0.00')
+    >>> [l.delegated_amount for l in invoice.lines_to_pay]
+    [Decimal('5.00')]
+    >>> supplier_invoice.amount_to_pay
+    Decimal('0.00')
+    >>> [l.delegated_amount for l in supplier_invoice.lines_to_pay]
+    [Decimal('5.00')]
 
 Receive remaining line::
 

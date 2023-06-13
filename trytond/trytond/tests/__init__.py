@@ -19,6 +19,9 @@ def register():
     from . import field_datetime
     from . import field_dict
     from . import field_float
+    from . import field_integer
+    from . import field_many2many
+    from . import field_many2one
     from . import field_function
     from . import field_integer
     from . import field_many2many
@@ -41,6 +44,7 @@ def register():
     from . import modelview
     from . import mptt
     from . import multivalue
+    from . import note
     from . import resource
     from . import rule
     from . import tree
@@ -81,6 +85,7 @@ def register():
     modelview.register('tests')
     mptt.register('tests')
     multivalue.register('tests')
+    note.register('tests')
     resource.register('tests')
     rule.register('tests')
     tree.register('tests')

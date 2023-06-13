@@ -4,7 +4,6 @@ import base64
 import http.client
 import logging
 import os
-import posixpath
 import sys
 import traceback
 import urllib.parse
@@ -25,10 +24,6 @@ try:
             x_port=num_proxies, x_prefix=num_proxies)
 except ImportError:
     from werkzeug.contrib.fixers import ProxyFix as NumProxyFix
-try:
-    from werkzeug.security import safe_join
-except ImportError:
-    safe_join = posixpath.join
 try:
     from werkzeug.middleware.shared_data import SharedDataMiddleware
 except ImportError:
@@ -53,7 +48,7 @@ class Base64Converter(BaseConverter):
         return base64.urlsafe_b64decode(value).decode('utf-8')
 
     def to_url(self, value):
-        return base64.urlsafe_b64encode(value.encode('utf-8')).decode('ascii')
+        return base64.urlsafe_b64encode(value.encode('utf-8'))
 
 
 class TrytondWSGI(object):
@@ -81,10 +76,9 @@ class TrytondWSGI(object):
         if request.user_id:
             return wrapped(*args, **kwargs)
         else:
-            headers = {}
-            if request.headers.get('X-Requested-With') != 'XMLHttpRequest':
-                headers['WWW-Authenticate'] = 'Basic realm="Tryton"'
-            response = Response(None, http.client.UNAUTHORIZED, headers)
+            response = Response(
+                None, http.client.UNAUTHORIZED,
+                {'WWW-Authenticate': 'Basic realm="Tryton"'})
             abort(http.client.UNAUTHORIZED, response=response)
 
     def check_request_size(self, request, size=None):
@@ -198,14 +192,13 @@ class SharedDataMiddlewareIndex(SharedDataMiddleware):
     def get_directory_loader(self, directory):
         def loader(path):
             if path is not None:
-                path = safe_join(directory, path)
+                path = os.path.join(directory, path)
             else:
                 path = directory
-            if path is not None:
-                if os.path.isdir(path):
-                    path = posixpath.join(path, 'index.html')
-                if os.path.isfile(path):
-                    return os.path.basename(path), self._opener(path)
+            if os.path.isdir(path):
+                path = os.path.join(path, 'index.html')
+            if os.path.isfile(path):
+                return os.path.basename(path), self._opener(path)
             return None, None
         return loader
 

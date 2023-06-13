@@ -1,14 +1,15 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
+import time
 import datetime
 import os
 import inspect
 import logging
 import subprocess
 import tempfile
-import time
 import warnings
 import zipfile
+import requests
 import operator
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -29,6 +30,7 @@ from genshi.filters import Translator
 from trytond.i18n import gettext
 from trytond.pool import Pool, PoolBase
 from trytond.transaction import Transaction
+from trytond.config import config
 from trytond.tools import slugify
 from trytond.url import URLMixin
 from trytond.rpc import RPC
@@ -43,6 +45,7 @@ except ImportError:
     Manifest, MANIFEST = None, None
 
 logger = logging.getLogger(__name__)
+
 
 MIMETYPES = {
     'odt': 'application/vnd.oasis.opendocument.text',
@@ -59,6 +62,7 @@ FORMAT2EXT = {
     'doc95': 'doc',
     'docbook': 'xml',
     'docx7': 'docx',
+    'docx': 'docx',
     'ooxml': 'xml',
     'latex': 'ltx',
     'sdc4': 'sdc',
@@ -73,6 +77,7 @@ FORMAT2EXT = {
     'xhtml': 'html',
     'xls5': 'xls',
     'xls95': 'xls',
+    'xlsx': 'xlsx',
     }
 
 TIMEDELTA_DEFAULT_CONVERTER = {
@@ -84,6 +89,10 @@ TIMEDELTA_DEFAULT_CONVERTER['d'] = TIMEDELTA_DEFAULT_CONVERTER['h'] * 24
 TIMEDELTA_DEFAULT_CONVERTER['w'] = TIMEDELTA_DEFAULT_CONVERTER['d'] * 7
 TIMEDELTA_DEFAULT_CONVERTER['M'] = TIMEDELTA_DEFAULT_CONVERTER['d'] * 30
 TIMEDELTA_DEFAULT_CONVERTER['Y'] = TIMEDELTA_DEFAULT_CONVERTER['d'] * 365
+
+
+class UnoConversionError(UserError):
+    pass
 
 
 class ReportFactory:
@@ -322,6 +331,16 @@ class Report(URLMixin, PoolBase):
     @classmethod
     def convert(cls, report, data, timeout=5 * 60, retry=5):
         "converts the report data to another mimetype if necessary"
+        # AKE: support printing via external api
+        if config.get('report', 'api', default=None):
+            return cls.convert_api(report, data, timeout)
+        elif config.get('report', 'unoconv', default=True):
+            return cls.convert_unoconv(report, data, timeout)
+        else:
+            raise NotImplementedError
+
+    @classmethod
+    def convert_unoconv(cls, report, data, timeout, retry=5):
         input_format = report.template_extension
         output_format = report.extension or report.template_extension
 
@@ -344,11 +363,28 @@ class Report(URLMixin, PoolBase):
             cmd = ['soffice',
                 '--headless', '--nolockcheck', '--nodefault', '--norestore',
                 '--convert-to', oext, '--outdir', dtemp, path]
+            if output_format == 'csv':
+                # https://ask.libreoffice.org/en/question/213090/wrong-encoding-with-convert-from-csv-to-xlsx/
+                # field delimiter, string delimiter, encoding, header
+                # 44 => ,
+                # 34 => "
+                # 76 => UTF-8
+                # No header line
+                cmd.extend(
+                    ['--infilter="Text - txt - csv (StarCalc):44,34,76,"'])
             output = os.path.splitext(path)[0] + os.extsep + oext
             for count in range(retry, -1, -1):
                 if count != retry:
                     time.sleep(0.02 * (retry - count))
                 subprocess.check_call(cmd, timeout=timeout)
+                # ABDC: Please don't judge me... Soffice makes me do this
+                # because its returns before file creation.
+                nb_retry = 0
+                while nb_retry < 10:
+                    nb_retry += 1
+                    if os.path.exists(output):
+                        break
+                    time.sleep(0.02)
                 if os.path.exists(output):
                     with open(output, 'rb') as fp:
                         return oext, fp.read()
@@ -363,6 +399,37 @@ class Report(URLMixin, PoolBase):
                 os.rmdir(dtemp)
             except OSError:
                 pass
+
+    @classmethod
+    def convert_api(cls, report, data, timeout):
+        # AKE: support printing via external api
+        User = Pool().get('res.user')
+        input_format = report.template_extension
+        output_format = report.extension or report.template_extension
+
+        if output_format in MIMETYPES:
+            return output_format, data
+
+        oext = FORMAT2EXT.get(output_format, output_format)
+        url_tpl = config.get('report', 'api')
+        url = url_tpl.format(oext=oext)
+        files = {'file': ('doc.' + input_format, data)}
+        for count in range(config.getint('report', 'unoconv_retry'), -1, -1):
+            try:
+                r = requests.post(url, files=files, timeout=timeout)
+                if r.status_code < 300:
+                    return oext, r.content
+                else:
+                    raise UnoConversionError('Conversion of "%s" failed. '
+                        'Unoconv responsed with "%s".' % (
+                            report.report_name, r.reason))
+            except UnoConversionError as e:
+                if count:
+                    time.sleep(0.1)
+                    continue
+                user = User(Transaction().user)
+                logger.error(e.message + ' User: %s' % user.name or '')
+                raise
 
     @classmethod
     def format_date(cls, value, lang=None, format=None):

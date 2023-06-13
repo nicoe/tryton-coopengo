@@ -6,6 +6,7 @@ from tryton import rpc
 from tryton.signal_event import SignalEvent
 from tryton.common.domain_inversion import is_leaf
 from tryton.common import RPCExecute, RPCException, MODELACCESS
+from tryton.pyson import PYSONDecoder
 
 
 class Group(SignalEvent, list):
@@ -57,10 +58,14 @@ class Group(SignalEvent, list):
 
     @property
     def domain(self):
+        group_domain = self.__domain
+        if group_domain and isinstance(group_domain, str):
+            decoder = PYSONDecoder(self.context)
+            group_domain = decoder.decode(group_domain)
         if self.parent and self.child_name:
             field = self.parent.group.fields[self.child_name]
-            return [self.__domain, field.domain_get(self.parent)]
-        return self.__domain
+            return [group_domain, field.domain_get(self.parent)]
+        return group_domain
 
     def clean4inversion(self, domain):
         "This method will replace non relevant fields for domain inversion"
@@ -78,8 +83,14 @@ class Group(SignalEvent, list):
             head = self.clean4inversion(head)
         return [head] + self.clean4inversion(tail)
 
+    def get_domain(self):
+        if not self.domain or not isinstance(self.domain, str):
+            return self.domain
+        decoder = PYSONDecoder(self.context)
+        return decoder.decode(self.domain)
+
     def __get_domain4inversion(self):
-        domain = self.domain
+        domain = self.get_domain()
         if (self.__domain4inversion is None
                 or self.__domain4inversion[0] != domain):
             self.__domain4inversion = (
@@ -91,7 +102,6 @@ class Group(SignalEvent, list):
 
     def insert(self, pos, record):
         assert record.group is self
-        pos = min(pos, len(self))
         if pos >= 1:
             self.__getitem__(pos - 1).next[id(self)] = record
         if pos < self.__len__():
@@ -187,7 +197,6 @@ class Group(SignalEvent, list):
         ctx['_timestamp'] = {}
         for rec in records:
             ctx['_timestamp'].update(rec.get_timestamp())
-            rec.destroy()
         record_ids = set(r.id for r in records)
         reload_ids = set(root_group.on_write_ids(list(record_ids)))
         reload_ids -= record_ids
@@ -243,7 +252,8 @@ class Group(SignalEvent, list):
         if not ids:
             return True
 
-        if len(ids) > 1:
+        # PJA : Select first entry in list if even if there is only one #3431
+        if len(ids) >= 1:
             self.lock_signal = True
 
         new_records = []
@@ -399,25 +409,23 @@ class Group(SignalEvent, list):
     def remove(self, record, remove=False, modified=True, signal=True,
             force_remove=False):
         idx = self.index(record)
-        if record.id >= 0:
+        if self[idx].id >= 0:
             if remove:
-                if record in self.record_deleted:
-                    self.record_deleted.remove(record)
-                if record not in self.record_removed:
-                    self.record_removed.append(record)
+                if self[idx] in self.record_deleted:
+                    self.record_deleted.remove(self[idx])
+                self.record_removed.append(self[idx])
             else:
-                if record in self.record_removed:
-                    self.record_removed.remove(record)
-                if record not in self.record_deleted:
-                    self.record_deleted.append(record)
+                if self[idx] in self.record_removed:
+                    self.record_removed.remove(self[idx])
+                self.record_deleted.append(self[idx])
         if record.parent:
             record.parent.modified_fields.setdefault('id')
             record.parent.signal('record-modified')
         if modified:
             record.modified_fields.setdefault('id')
             record.signal('record-modified')
-        if record.id < 0 or force_remove:
-            self._remove(record)
+        if self[idx].id < 0 or force_remove:
+            self._remove(self[idx])
 
         if len(self):
             self.current_idx = min(idx, len(self) - 1)

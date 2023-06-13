@@ -369,6 +369,7 @@ class Graph(Gtk.DrawingArea):
             self.datas.setdefault(x, {})
             for yfield in self.yfields:
                 key = yfield.get('key', yfield['name'])
+                self.datas[x].setdefault(key, 0.0)
                 if yfield.get('domain'):
                     context = rpc.CONTEXT.copy()
                     context['context'] = context.copy()
@@ -377,7 +378,6 @@ class Graph(Gtk.DrawingArea):
                         context[field] = model[field].get(model)
                     if not PYSONDecoder(context).decode(yfield['domain']):
                         continue
-                self.datas[x].setdefault(key, 0.0)
                 if yfield['name'] == '#':
                     self.datas[x][key] += 1
                 else:
@@ -442,10 +442,10 @@ class Graph(Gtk.DrawingArea):
             self.maxyval = 0.0
             self.minyval = 0.0
         else:
-            self.maxyval = max([reduce(lambda x, y: max(x, y), x.values())
-                    for x in self.datas.values()])
-            self.minyval = min([reduce(lambda x, y: min(x, y), x.values())
-                    for x in self.datas.values()])
+            self.maxyval = max([reduce(lambda x, y: max(x, y), list(x.values()))
+                    for x in list(self.datas.values())])
+            self.minyval = min([reduce(lambda x, y: min(x, y), list(x.values()))
+                    for x in list(self.datas.values())])
         if self.minyval > 0:
             self.minyval = 0.0
 

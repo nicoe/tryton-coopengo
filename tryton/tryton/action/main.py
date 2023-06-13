@@ -1,11 +1,13 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
+import copy
 import gettext
 import webbrowser
-
+import os
+import tempfile
 import tryton.rpc as rpc
-from tryton.common import RPCProgress, RPCExecute, RPCException
-from tryton.common import message, selection, file_write, file_open, mailto
+from tryton.common import RPCProgress, RPCExecute, RPCException, slugify
+from tryton.common import message, selection, file_open, mailto
 from tryton.config import CONFIG
 from tryton.pyson import PYSONDecoder
 
@@ -34,17 +36,33 @@ class Action(object):
             return False
         if not res:
             return False
-        (type, data, print_p, name) = res
+        (types, datas, print_p, names) = res
+        fp_names = []
         if not print_p and direct_print:
             print_p = True
+        dtemp = tempfile.mkdtemp(prefix='tryton_')
 
-        fp_name = file_write((name, type), data)
+        # ABE : #5658 : Manage multiple attachments
+        if type(names) is not list:
+            names = [names]
+        if type(datas) is not list:
+            datas = [datas]
+        if type(types) is not list:
+            types = [types]
+        for data, name, type_ in zip(datas, names, types):
+            fp_name = os.path.join(dtemp,
+                slugify(name) + os.extsep + slugify(type_))
+            with open(fp_name, 'wb') as file_d:
+                file_d.write(data)
+            fp_names.append((fp_name, type_))
         if email_print:
             mailto(to=email.get('to'), cc=email.get('cc'),
-                subject=email.get('subject'), body=email.get('body'),
-                attachment=fp_name)
+                bcc=email.get('bcc'), subject=email.get('subject'),
+                body=email.get('body'),
+                attachment=','.join([x[0] for x in fp_names]))
         else:
-            file_open(fp_name, type, print_p=print_p)
+            for fp_name, type_ in fp_names:
+                file_open(fp_name, type_, print_p=print_p)
         return True
 
     @staticmethod
@@ -86,14 +104,11 @@ class Action(object):
             if not data.get('ids') or not data.get('model'):
                 return name
             max_records = 5
-            ids = list(filter(lambda id: id >= 0, data['ids']))[:max_records]
-            if not ids:
-                return name
             rec_names = RPCExecute('model', data['model'],
-                'read', ids, ['rec_name'],
+                'read', data['ids'][:max_records], ['rec_name'],
                 context=context)
             name_suffix = _(', ').join([x['rec_name'] for x in rec_names])
-            if len(data['ids']) > len(ids):
+            if len(data['ids']) > max_records:
                 name_suffix += _(',\u2026')
             return _('%s (%s)') % (name, name_suffix)
 
@@ -119,6 +134,8 @@ class Action(object):
             action_ctx = context.copy()
             action_ctx.update(
                 decoder.decode(action.get('pyson_context') or '{}'))
+            # XXX: add extra_context
+            action_ctx.update(data.get('extra_context', {}))
             ctx.update(action_ctx)
 
             ctx['context'] = ctx
@@ -126,8 +143,15 @@ class Action(object):
             domain = decoder.decode(action['pyson_domain'])
             order = decoder.decode(action['pyson_order'])
             search_value = decoder.decode(action['pyson_search_value'] or '[]')
-            tab_domain = [(n, decoder.decode(d), c)
-                for n, d, c in action['domains']]
+            # XXX: Evaluate tab domain later
+            # Dynamic domain evaluation in screens and tabs
+            # see : 4cfefeab5
+            action_ctx.update({
+                    'active_model': data.get('model'),
+                    'active_id': data.get('id'),
+                    'active_ids': data.get('ids', []),
+                    })
+            tab_domain = [(n, (ctx, d), c) for n, d, c in action['domains']]
 
             name = action.get('name', '')
             if action.get('keyword', ''):
@@ -152,11 +176,13 @@ class Action(object):
                 icon=(action.get('icon.rec_name') or ''),
                 tab_domain=tab_domain,
                 context_model=action['context_model'],
-                context_domain=action['context_domain'])
+                context_domain=action.get('context_domain', None))
         elif action['type'] == 'ir.action.wizard':
             name = action.get('name', '')
             if action.get('keyword', 'form_action') == 'form_action':
                 name = add_name_suffix(name, context)
+            context = copy.deepcopy(context)
+            context.update(data.get('extra_context', {}))
             Window.create_wizard(action['wiz_name'], data,
                 direct_print=action.get('direct_print', False),
                 email_print=action.get('email_print', False),

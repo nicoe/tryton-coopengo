@@ -1,6 +1,7 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
 import datetime as dt
+import time
 import json
 import logging
 import os
@@ -18,10 +19,13 @@ from trytond import backend
 from trytond.config import config
 from trytond.transaction import Transaction
 from trytond.tools import resolve, grouped_slice
+from trytond.cache_serializer import pack, unpack
+
 
 __all__ = ['BaseCache', 'Cache', 'LRUDict']
 _clear_timeout = config.getint('cache', 'clean_timeout', default=5 * 60)
 logger = logging.getLogger(__name__)
+show_debug_logs = logger.isEnabledFor(logging.DEBUG)
 
 
 def _cast(column):
@@ -63,9 +67,13 @@ class BaseCache(object):
 
     def _key(self, key):
         if self.context:
+            # Remove client key from cache's context.
+            # See redmine issue #19794
             context = Transaction().context.copy()
-            context.pop('client', None)
-            context.pop('_request', None)
+            for to_pop in {
+                    'client', '_request', '_check_access', '_skip_warnings',
+                    'session', 'token'}:
+                context.pop(to_pop, None)
             return (key, Transaction().user, freeze(context))
         return key
 
@@ -121,7 +129,7 @@ class MemoryCache(BaseCache):
         transaction = Transaction()
         dbname = transaction.database.name
         lower = self._transaction_lower.get(dbname, self._default_lower)
-        if (transaction in self._reset
+        if (self._name in self._reset.get(transaction, set())
                 or transaction.started_at < lower):
             try:
                 return self._transaction_cache[transaction]
@@ -141,7 +149,8 @@ class MemoryCache(BaseCache):
                 return default
             cache[key] = (expire, result)
             return result
-        except (KeyError, TypeError):
+        # JCA: Properly crash on type error
+        except KeyError:
             return default
 
     def set(self, key, value):
@@ -151,10 +160,14 @@ class MemoryCache(BaseCache):
             expire = dt.datetime.now() + self.duration
         else:
             expire = None
-        try:
-            cache[key] = (expire, value)
-        except TypeError:
-            pass
+
+        # JCA: Log cases where the cache size is exceeded
+        if show_debug_logs:
+            if len(cache) >= cache.size_limit:
+                logger.debug('Cache limit exceeded for %s' % self._name)
+
+        cache[key] = (expire, value)
+        # JCA: Properly crash on type error
         return value
 
     def clear(self):
@@ -211,7 +224,7 @@ class MemoryCache(BaseCache):
     @classmethod
     def commit(cls, transaction):
         table = Table(cls._table)
-        reset = cls._reset.setdefault(transaction, set())
+        reset = cls._reset.pop(transaction, None)
         if not reset:
             return
         database = transaction.database
@@ -264,10 +277,7 @@ class MemoryCache(BaseCache):
 
     @classmethod
     def rollback(cls, transaction):
-        try:
-            cls._reset[transaction].clear()
-        except KeyError:
-            pass
+        cls._reset.pop(transaction, None)
 
     @classmethod
     def drop(cls, dbname):
@@ -296,12 +306,14 @@ class MemoryCache(BaseCache):
             raise NotImplementedError
 
         logger.info("listening on channel '%s' of '%s'", cls._channel, dbname)
-        conn = database.get_connection(autocommit=True)
         pid = os.getpid()
         current_thread = threading.current_thread()
+        conn = None
         try:
+            conn = database.get_connection(autocommit=True)
             cursor = conn.cursor()
             cursor.execute('LISTEN "%s"' % cls._channel)
+            conn.commit()
 
             while cls._listener.get((pid, dbname)) == current_thread:
                 readable, _, _ = select.select([conn], [], [])
@@ -314,24 +326,73 @@ class MemoryCache(BaseCache):
                     if notification.payload:
                         reset = json.loads(notification.payload)
                         for name in reset:
-                            inst = cls._instances[name]
-                            inst._clear(dbname)
+                            # XUNG
+                            # Name not in instances when control_vesion_upgrade table is locked
+                            # because another process is currently upgrading
+                            # We must ignore cache reset notifications (Not yet loaded anyway)
+                            if name in cls._instances:
+                                inst = cls._instances[name]
+                                inst._clear(dbname)
                 cls._clean_last = datetime.now()
         except Exception:
-            logger.error(
-                "cache listener on '%s' crashed", dbname, exc_info=True)
-            raise
+            if not config.getboolean('env', 'testing'):
+                logger.error(
+                    "cache listener on '%s' crashed", dbname, exc_info=True)
+                raise
         finally:
-            database.put_connection(conn)
+            if conn:
+                database.put_connection(conn)
             with cls._listener_lock[pid]:
                 if cls._listener.get((pid, dbname)) == current_thread:
                     del cls._listener[pid, dbname]
+
+    @classmethod
+    def _purge_listeners(cls, dbname):
+        '''
+        Purges all listeners for a given database
+
+        Should no longer be useful, but we may need it later so we will keep it
+        around a little longer
+        '''
+        pid = os.getpid()
+        thread_id = None
+        with cls._listener_lock[pid]:
+            if (pid, dbname) in cls._listener:
+                thread_id = cls._listener[pid, dbname].ident
+                del cls._listener[pid, dbname]
+
+        # JMO : doctest teardown remains stuck with code below
+        # TODO: fix this
+        if config.getboolean('env', 'testing'):
+            # We removed the thread from the list, but it can still be alive if
+            # it is busy clearing some cache
+            if thread_id is not None:
+                while {thread_id} & {x.ident for x in threading.enumerate()}:
+                    time.sleep(0.01)
+
+
+class DefaultCacheValue:
+    pass
+
+
+_default_cache_value = DefaultCacheValue()
+
+
+class SerializableMemoryCache(MemoryCache):
+    def get(self, key, default=None):
+        result = super(SerializableMemoryCache, self).get(key,
+            _default_cache_value)
+        return default if result == _default_cache_value else unpack(result)
+
+    def set(self, key, value):
+        super(SerializableMemoryCache, self).set(key, pack(value))
 
 
 if config.get('cache', 'class'):
     Cache = resolve(config.get('cache', 'class'))
 else:
-    Cache = MemoryCache
+    # JCA : Use serializable memory cache by default to avoid cache corruption
+    Cache = SerializableMemoryCache
 
 
 class LRUDict(OrderedDict):

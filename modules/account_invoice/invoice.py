@@ -289,59 +289,12 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
 
     @classmethod
     def __register__(cls, module_name):
-        pool = Pool()
-        Line = pool.get('account.invoice.line')
-        Tax = pool.get('account.invoice.tax')
         sql_table = cls.__table__()
-        line = Line.__table__()
-        tax = Tax.__table__()
 
         super(Invoice, cls).__register__(module_name)
         transaction = Transaction()
         cursor = transaction.connection.cursor()
         table = cls.__table_handler__(module_name)
-
-        # Migration from 3.8: remove invoice/credit note type
-        cursor.execute(*sql_table.select(sql_table.id,
-                where=sql_table.type.like('%_invoice')
-                | sql_table.type.like('%_credit_note'),
-                limit=1))
-        if cursor.fetchone():
-            for type_ in ['out', 'in']:
-                cursor.execute(*sql_table.update(
-                        columns=[sql_table.type],
-                        values=[type_],
-                        where=sql_table.type == '%s_invoice' % type_))
-                cursor.execute(*line.update(
-                        columns=[line.invoice_type],
-                        values=[type_],
-                        where=line.invoice_type == '%s_invoice' % type_))
-
-                cursor.execute(*line.update(
-                        columns=[line.quantity, line.invoice_type],
-                        values=[-line.quantity, type_],
-                        where=(line.invoice_type == '%s_credit_note' % type_)
-                        & (line.invoice == Null)
-                        ))
-                # Don't use UPDATE FROM because SQLite nor MySQL support it
-                cursor.execute(*line.update(
-                        columns=[line.quantity, line.invoice_type],
-                        values=[-line.quantity, type_],
-                        where=line.invoice.in_(sql_table.select(sql_table.id,
-                                where=(
-                                    sql_table.type == '%s_credit_note' % type_)
-                                ))))
-                cursor.execute(*tax.update(
-                        columns=[tax.base, tax.amount, tax.base_sign],
-                        values=[-tax.base, -tax.amount, -tax.base_sign],
-                        where=tax.invoice.in_(sql_table.select(sql_table.id,
-                                where=(
-                                    sql_table.type == '%s_credit_note' % type_)
-                                ))))
-                cursor.execute(*sql_table.update(
-                        columns=[sql_table.type],
-                        values=[type_],
-                        where=sql_table.type == '%s_credit_note' % type_))
 
         # Migration from 4.0: Drop not null on payment_term
         table.not_null_action('payment_term', 'remove')
@@ -489,7 +442,7 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
             if self.currency:
                 return self.currency.is_zero(amount)
             else:
-                return amount == Decimal('0.0')
+                return amount != Decimal('0.0')
 
         tax_keys = []
         taxes = list(self.taxes or [])
@@ -708,7 +661,7 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
                         invoice.company.currency, amount, invoice.currency)
             if invoice.type == 'in' and amount_currency:
                 amount_currency *= -1
-            res[invoice.id] = amount_currency
+            res[invoice.id] = invoice.currency.round(amount_currency)
         return res
 
     @classmethod
@@ -917,6 +870,9 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
         line.description = self.description
         return line
 
+    def get_payment_term_computation_date(self):
+        return self.invoice_date
+
     def get_move(self):
         '''
         Compute account move for the invoice and return the created move
@@ -945,7 +901,8 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
         term_lines = [(Date.today(), total)]
         if self.payment_term:
             term_lines = self.payment_term.compute(
-                total, self.company.currency, self.invoice_date)
+                total, self.company.currency,
+                self.get_payment_term_computation_date())
         remainder_total_currency = total_currency
         for date, amount in term_lines:
             line = self._get_move_line(date, amount)
@@ -1180,7 +1137,6 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
         default.setdefault('move', None)
         default.setdefault('cancel_move', None)
         default.setdefault('invoice_report_cache', None)
-        default.setdefault('invoice_report_cache_id', None)
         default.setdefault('invoice_report_format', None)
         default.setdefault('payment_lines', None)
         default.setdefault('invoice_date', None)
@@ -1361,10 +1317,9 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
         '''
         credit = self.__class__(**values)
 
-        for field in [
-                'company', 'tax_identifier', 'party', 'party_tax_identifier',
-                'invoice_address', 'currency', 'journal', 'account',
-                'payment_term', 'description', 'comment', 'type']:
+        for field in ('company', 'party', 'invoice_address', 'currency',
+               'journal', 'account', 'payment_term', 'description',
+               'comment', 'type'):
             setattr(credit, field, getattr(self, field))
 
         credit.lines = [line._credit() for line in self.lines]
@@ -1521,7 +1476,11 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
             to_reconcile = []
             for line in invoice.move.lines + invoice.cancel_move.lines:
                 if line.account == invoice.account:
-                    to_reconcile.append(line)
+                    # JMO : handle case of zero lines
+                    # on cancel move
+                    zero_reconciled = not line.amount and line.reconciliation
+                    if not zero_reconciled:
+                        to_reconcile.append(line)
             Line.reconcile(to_reconcile)
 
         cls._clean_payments(invoices)
@@ -2238,10 +2197,8 @@ class InvoiceLine(sequence_ordered(), ModelSQL, ModelView, TaxableMixin):
         else:
             line.quantity = self.quantity
 
-        for field in [
-                'sequence', 'type', 'invoice_type', 'party', 'currency',
-                'company', 'unit_price', 'description', 'unit', 'product',
-                'account']:
+        for field in ('sequence', 'type', 'invoice_type', 'unit_price',
+                'description', 'unit', 'product', 'account'):
             setattr(line, field, getattr(self, field))
         line.taxes = self.taxes
         return line

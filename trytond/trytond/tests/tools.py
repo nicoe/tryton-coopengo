@@ -7,14 +7,14 @@ from .test_tryton import restore_db_cache, backup_db_cache, drop_create
 __all__ = ['activate_modules', 'set_user']
 
 
-def activate_modules(modules):
+# PKU add cache_file_name
+def activate_modules(modules, cache_file_name=None):
     if isinstance(modules, str):
         modules = [modules]
-    cache_name = '-'.join(modules)
+    cache_name = cache_file_name or '-'.join(modules)
     if restore_db_cache(cache_name):
         return _get_config()
     drop_create()
-
     cfg = _get_config()
     Module = Model.get('ir.module')
     records = Module.find([

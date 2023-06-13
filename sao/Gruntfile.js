@@ -100,9 +100,10 @@ module.exports = function(grunt) {
     less: {
         dev: {
             options: {
-                paths: ['src', 'bower_components/bootstrap/less']
+                paths: ['src', 'bower_components/bootstrap/less', 'theme/coog']
             },
             files: {
+                'dist/coog-sao.css': 'theme/coog/coog-sao.less',
                 'dist/<%= pkg.name %>.css': 'src/*.less'
             }
         },
@@ -112,6 +113,7 @@ module.exports = function(grunt) {
                 yuicompress: true
             },
             files: {
+                'dist/coog-sao.min.css': 'theme/coog/coog-sao.less',
                 'dist/<%= pkg.name %>.min.css': 'src/*.less'
             }
         }
@@ -122,7 +124,8 @@ module.exports = function(grunt) {
             tasks: ['concat', 'jshint']
         },
         styles: {
-            files: ['src/*.less'],
+            files: ['src/*.less', 'theme/coog/*.less',
+                'theme/coog/elements/*.less'],
             tasks: 'less:dev'
         }
     },

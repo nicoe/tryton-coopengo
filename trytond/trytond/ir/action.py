@@ -63,8 +63,6 @@ class Action(DeactivableMixin, ModelSQL, ModelView):
     usage = fields.Char('Usage')
     keywords = fields.One2Many('ir.action.keyword', 'action',
             'Keywords')
-    groups = fields.Many2Many('ir.action-res.group', 'action', 'group',
-            'Groups')
     icon = fields.Many2One('ir.ui.icon', 'Icon')
 
     @classmethod
@@ -132,13 +130,12 @@ class ActionKeyword(ModelSQL, ModelView):
             ('form_print', 'Print form'),
             ('form_action', 'Action form'),
             ('form_relate', 'Form relate'),
+            ('form_toolbar', 'Form Toolbar'),
             ('graph_open', 'Open Graph'),
             ], string='Keyword', required=True)
     model = fields.Reference('Model', selection='models_get')
     action = fields.Many2One('ir.action', 'Action',
         ondelete='CASCADE', select=True)
-    groups = fields.Function(fields.One2Many('res.group', None, 'Groups'),
-        'get_groups', searcher='search_groups')
     _get_keyword_cache = Cache('ir_action_keyword.get_keyword')
 
     @classmethod
@@ -154,13 +151,6 @@ class ActionKeyword(ModelSQL, ModelView):
 
         table = cls.__table_handler__(module_name)
         table.index_action(['keyword', 'model'], 'add')
-
-    def get_groups(self, name):
-        return [g.id for g in self.action.groups]
-
-    @classmethod
-    def search_groups(cls, name, clause):
-        return [('action.' + clause[0],) + tuple(clause[1:])]
 
     @classmethod
     def validate(cls, actions):
@@ -197,7 +187,7 @@ class ActionKeyword(ModelSQL, ModelView):
     def models_get():
         pool = Pool()
         Model = pool.get('ir.model')
-        return [(m.model, m.name) for m in Model.search([])]
+        return [(None, '')] + [(m.model, m.name) for m in Model.search([])]
 
     @classmethod
     def delete(cls, keywords):
@@ -239,9 +229,12 @@ class ActionKeyword(ModelSQL, ModelView):
 
         clause = [
             ('keyword', '=', keyword),
-            ('model', '=', model + ',-1'),
+            ['OR',
+                ('model', '=', model + ',-1'),
+                ('model', '=', None),
+                ],
             ]
-        if model_id >= 0:
+        if model_id is not None and model_id >= 0:
             clause = ['OR',
                 clause,
                 [
@@ -270,7 +263,9 @@ class ActionMixin(ModelSQL):
 
     @classmethod
     def __setup__(cls):
+        pool = Pool()
         super(ActionMixin, cls).__setup__()
+        Action = pool.get('ir.action')
         for name in dir(Action):
             field = getattr(Action, name)
             if (isinstance(field, fields.Field)
@@ -403,18 +398,6 @@ class ActionMixin(ModelSQL):
             new_records.extend(super(ActionMixin, cls).copy([record],
                     default=default))
         return new_records
-
-    @classmethod
-    def get_groups(cls, name, action_id=None):
-        # TODO add cache
-        domain = [
-            (cls._action_name, '=', name),
-            ]
-        if action_id:
-            domain.append(('id', '=', action_id))
-        actions = cls.search(domain)
-        groups = {g.id for a in actions for g in a.groups}
-        return groups
 
     @classmethod
     def fetch_action(cls, action_id):

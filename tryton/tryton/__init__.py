@@ -1,12 +1,14 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
-__version__ = "5.6.16"
+__version_coog__ = "2.12"
+__version__ = "5.6.3"
 import gi
 import locale
 
 gi.require_version('Gtk', '3.0')
 gi.require_version('Gdk', '3.0')
 gi.require_foreign('cairo')
+gi.require_version('GtkSource', '3.0')
 try:
     gi.require_version('GtkSpell', '3.0')
 except ValueError:

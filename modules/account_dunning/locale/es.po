@@ -188,6 +188,10 @@ msgctxt "model:ir.action.act_window.domain,name:act_dunning_form_domain_all"
 msgid "All"
 msgstr "Todo"
 
+msgctxt "model:ir.action.act_window.domain,name:act_dunning_form_domain_done"
+msgid "Done"
+msgstr "Finalizado"
+
 msgctxt "model:ir.action.act_window.domain,name:act_dunning_form_domain_draft"
 msgid "Draft"
 msgstr "Borrador"

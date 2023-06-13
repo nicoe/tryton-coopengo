@@ -1,7 +1,6 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
 "Screen"
-import copy
 import functools
 import datetime
 import calendar
@@ -42,6 +41,7 @@ class Screen(SignalEvent):
     def __init__(self, model_name, **attributes):
         context = attributes.get('context', {})
         self.limit = attributes.get('limit', CONFIG['client.limit'])
+        self.position = 0
         self.offset = 0
         super(Screen, self).__init__()
 
@@ -68,14 +68,15 @@ class Screen(SignalEvent):
         self.tree_states = collections.defaultdict(
             lambda: collections.defaultdict(lambda: None))
         self.tree_states_done = set()
+        self.__current_record = None
         self.__group = None
         self.new_group(context or {})
-        self.__current_record = None
         self.current_record = None
         self.screen_container = ScreenContainer(attributes.get('tab_domain'))
         self.screen_container.alternate_view = attributes.get(
             'alternate_view', False)
         self.widget = self.screen_container.widget_get()
+        self._multiview_form = None
 
         self.context_screen = None
         if attributes.get('context_model'):
@@ -142,6 +143,10 @@ class Screen(SignalEvent):
     def __repr__(self):
         return '<Screen %s at %s>' % (self.model_name, id(self))
 
+    @property
+    def count_limit(self):
+        return self.limit * 100 + self.offset
+
     def search_active(self, active=True):
         if active and not self.parent:
             self.screen_container.set_screen(self)
@@ -170,12 +175,13 @@ class Screen(SignalEvent):
         else:
             view_tree = self.fields_view_tree[view_id]
 
-        fields = copy.deepcopy(view_tree['fields'])
-        for name, props in fields.items():
-            if props['type'] not in ('selection', 'reference'):
+        fields = view_tree['fields'].copy()
+        for name in fields:
+            if fields[name]['type'] not in ('selection', 'reference'):
                 continue
-            if isinstance(props['selection'], (tuple, list)):
+            if isinstance(fields[name]['selection'], (tuple, list)):
                 continue
+            props = fields[name] = fields[name].copy()
             props['selection'] = self.get_selection(props)
 
         if 'arch' in view_tree:
@@ -206,7 +212,7 @@ class Screen(SignalEvent):
         # Add common fields
         for name, string, type_ in (
                 ('id', _('ID'), 'integer'),
-                ('create_uid', _('Create by'), 'many2one'),
+                ('create_uid', _('Created by'), 'many2one'),
                 ('create_date', _('Created at'), 'datetime'),
                 ('write_uid', _('Edited by'), 'many2one'),
                 ('write_date', _('Edited at'), 'datetime'),
@@ -240,7 +246,7 @@ class Screen(SignalEvent):
 
     def search_prev(self, search_string):
         if self.limit:
-            self.offset = max(self.offset - self.limit, 0)
+            self.offset -= self.limit
         self.search_filter(search_string=search_string)
 
     def search_next(self, search_string):
@@ -265,20 +271,21 @@ class Screen(SignalEvent):
             self.new_group(context)
 
         domain = self.search_domain(search_string, True)
+        if self.context_domain:
+            decoder = PYSONDecoder(self.context)
+            domain = ['AND', domain, decoder.decode(self.context_domain)]
+        tab_domain = self.screen_container.get_tab_domain()
+        if tab_domain:
+            domain = ['AND', domain, tab_domain]
 
         context = self.context
         if self.screen_container.but_active.get_active():
             context['active_test'] = False
-        ids = []
-        while True:
-            try:
-                ids = RPCExecute('model', self.model_name, 'search', domain,
-                    self.offset, self.limit, self.order, context=context)
-            except RPCException:
-                break
-            if ids or self.offset <= 0:
-                break
-            self.offset = max(self.offset - self.limit, 0)
+        try:
+            ids = RPCExecute('model', self.model_name, 'search', domain,
+                self.offset, self.limit, self.order, context=context)
+        except RPCException:
+            ids = []
         if not only_ids:
             if self.limit is not None and len(ids) == self.limit:
                 try:
@@ -302,6 +309,12 @@ class Screen(SignalEvent):
         self.count_tab_domain()
         return bool(ids)
 
+    def get_domain(self):
+        if not self.domain or not isinstance(self.domain, str):
+            return self.domain
+        decoder = PYSONDecoder(self.context)
+        return decoder.decode(self.domain)
+
     def search_domain(self, search_string=None, set_text=False, with_tab=True):
         domain = []
         # Test first parent to avoid calling unnecessary domain_parser
@@ -317,11 +330,12 @@ class Screen(SignalEvent):
         else:
             domain = [('id', 'in', [x.id for x in self.group])]
 
+        my_domain = self.get_domain()
         if domain:
-            if self.domain:
-                domain = ['AND', domain, self.domain]
+            if my_domain:
+                domain = ['AND', domain, my_domain]
         else:
-            domain = self.domain
+            domain = my_domain
 
         if self.screen_container.but_active.get_active():
             if domain:
@@ -351,11 +365,12 @@ class Screen(SignalEvent):
             self.screen_container.set_tab_counter(count, idx)
         screen_domain = self.search_domain(
             self.screen_container.get_text(), with_tab=False)
-        for idx, (name, domain, count) in enumerate(
+        for idx, (name, (ctx, domain), count) in enumerate(
                 self.screen_container.tab_domain):
             if not count:
                 continue
-            domain = ['AND', domain, screen_domain]
+            decoder = PYSONDecoder(ctx)
+            domain = ['AND', decoder.decode(domain), screen_domain]
             set_tab_counter(lambda: None, idx)
             RPCExecute('model', self.model_name,
                 'search_count', domain, context=self.context,
@@ -387,16 +402,12 @@ class Screen(SignalEvent):
                 fields[name] = field.attrs
                 fields_views[name] = field.views
         self.tree_states_done.clear()
+        self.order = None
         self.__group = group
         self.parent = group.parent
         self.parent_name = group.parent_name
         if self.parent:
             self.filter_widget = None
-            self.order = None
-        if len(group):
-            self.current_record = group[0]
-        else:
-            self.current_record = None
         self.__group.signal_connect(self, 'group-cleared', self._group_cleared)
         self.__group.signal_connect(self, 'group-list-changed',
                 self._group_list_changed)
@@ -407,6 +418,11 @@ class Screen(SignalEvent):
         for name, views in fields_views.items():
             self.__group.fields[name].views.update(views)
         self.__group.exclude_field = self.exclude_field
+        if len(group):
+            self.current_record = group[0]
+            self._group_list_changed(self.__group, 'record-changed')
+        else:
+            self.current_record = None
 
     group = property(__get_group, __set_group)
 
@@ -440,17 +456,27 @@ class Screen(SignalEvent):
         return self.__current_record
 
     def __set_current_record(self, record):
+        # Coog Specific for multimixed view
+        changed = self.__current_record != record
         self.__current_record = record
         if record:
             try:
-                pos = self.group.index(record) + self.offset + 1
+                self.position = self.group.index(record) + self.offset + 1
             except ValueError:
                 # XXX offset?
-                pos = record.get_index_path()
+                # JMO: get_index_path returns a tuple
+                # the comparison (">=1")  in _sig_label worked in python2
+                # but not anymore
+                # pos = record.get_index_path()
+                self.position = -1
         else:
-            pos = 0
-        self.signal('record-message', (pos, len(self.group) + self.offset,
-            self.search_count, record and record.id))
+            self.position = 0
+        self.signal('record-message',
+            (self.position, len(self.group) + self.offset, self.search_count,
+                record and record.id))
+        # Coog Specific for multimixed view
+        if changed:
+            self.signal('current-record-changed')
         self.signal('resources', record.resources if record else None)
         # update resources after 1 second
         GLib.timeout_add(1000, self._update_resources, record)
@@ -588,10 +614,19 @@ class Screen(SignalEvent):
         for field in fields:
             self.group.fields[field].views.add(view_id)
         view = View.parse(
-            self, view_id, view['type'], xml_dom, view.get('field_childs'))
+            self, view_id, view['type'], xml_dom, view.get('field_childs'),
+            view.get('children_definitions'))
         self.views.append(view)
+        # PJA: set list of fields to use on the view
+        view._field_keys = list(fields.keys())
 
         return view
+
+    def editable_open_get(self):
+        if (self.current_view and self.current_view.view_type == 'tree'
+                and self.current_view.attributes.get('editable_open')):
+            return self.current_view.widget_tree.editable_open
+        return False
 
     def new(self, default=True, rec_name=None):
         previous_view = self.current_view
@@ -617,12 +652,8 @@ class Screen(SignalEvent):
 
     @property
     def new_position(self):
-        if self.order is not None:
-            order = self.order
-        else:
-            order = self.default_order
-        if order:
-            for oexpr, otype in order:
+        if self.order:
+            for oexpr, otype in self.order:
                 if oexpr == 'id' and otype:
                     if otype.startswith('DESC'):
                         return 0
@@ -723,7 +754,15 @@ class Screen(SignalEvent):
             self.group.written(ids)
         if self.parent:
             self.parent.root_parent.reload()
-        self.display()
+        record_id = self.current_record.id if self.current_record else None
+        if self._multiview_form:
+            root_parent = self.current_record.root_parent
+            assert root_parent.model_name \
+                == self._multiview_form.screen.model_name, (
+                    root_parent.model_name, 'is not',
+                    self._multiview_form.screen.model_name)
+            self._multiview_form.screen.reload([root_parent.id])
+        self.display(res_id=record_id)
 
     def unremove(self):
         records = self.selected_records
@@ -732,7 +771,7 @@ class Screen(SignalEvent):
 
     def remove(self, delete=False, remove=False, force_remove=False,
             records=None):
-        records = records or self.selected_records
+        records = list(reversed(records or self.selected_records))
         if not records:
             return
         if delete:
@@ -741,7 +780,7 @@ class Screen(SignalEvent):
             if not self.group.delete(records):
                 return False
 
-        top_record = records[0]
+        top_record = records[-1]
         top_group = top_record.group
         idx = top_group.index(top_record)
         path = top_record.get_path(self.group)
@@ -791,6 +830,8 @@ class Screen(SignalEvent):
 
     def set_tree_state(self):
         view = self.current_view
+        if not view:
+            return
         if view.view_type not in ('tree', 'form'):
             return
         if id(view) in self.tree_states_done:
@@ -808,7 +849,8 @@ class Screen(SignalEvent):
         state = self.tree_states[parent][view.children_field]
         if state:
             expanded_nodes, selected_nodes = state
-        if state is None and CONFIG['client.save_tree_state']:
+        if state is None and CONFIG['client.save_tree_state'] and (
+                view.view_type != 'tree' or not view.always_expand):
             json_domain = self.get_tree_domain(parent)
             try:
                 expanded_nodes, selected_nodes = RPCExecute('model',
@@ -892,7 +934,6 @@ class Screen(SignalEvent):
         return json_domain
 
     def load(self, ids, set_cursor=True, modified=False):
-        self.tree_states_done.clear()
         self.group.load(ids, modified=modified)
         self.current_view.reset()
         if ids and self.current_view.view_type != 'calendar':
@@ -903,7 +944,7 @@ class Screen(SignalEvent):
         if set_cursor:
             self.set_cursor()
 
-    def display(self, res_id=None, set_cursor=False):
+    def display(self, res_id=None, set_cursor=False, force=False):
         if res_id:
             self.current_record = self.group.get(res_id)
         else:
@@ -924,7 +965,8 @@ class Screen(SignalEvent):
                 if (view == self.current_view
                         or view.view_type == 'tree'
                         or view.widget.get_parent()):
-                    view.display()
+                    view.display(force=force)
+
             self.current_view.widget.set_sensitive(
                 bool(self.group
                     or (self.current_view.view_type != 'form')
@@ -956,7 +998,8 @@ class Screen(SignalEvent):
             group = self.current_record.group
             record = self.current_record
             while group:
-                children = record.children_group(view.children_field)
+                children = record.children_group(view.children_field,
+                    view.children_definitions)
                 if children:
                     record = children[0]
                     break
@@ -1038,7 +1081,8 @@ class Screen(SignalEvent):
                 record = group[idx]
                 children = True
                 while children:
-                    children = record.children_group(view.children_field)
+                    children = record.children_group(view.children_field,
+                        view.children_definitions)
                     if children:
                         record = children[-1]
             else:
@@ -1112,6 +1156,9 @@ class Screen(SignalEvent):
     def clear(self):
         self.current_record = None
         self.group.clear()
+        self.tree_states_done.clear()
+        for view in self.views:
+            view.reset()
 
     def on_change(self, fieldname, attr):
         self.current_record.on_change(fieldname, attr)
@@ -1174,6 +1221,7 @@ class Screen(SignalEvent):
 
     def _button_class(self, button):
         ids = [r.id for r in self.selected_records]
+        current_id = self.current_record.id
         context = self.context
         context['_timestamp'] = {}
         for record in self.selected_records:
@@ -1183,18 +1231,32 @@ class Screen(SignalEvent):
                 ids, context=context)
         except RPCException:
             action = None
+
+        # PJA: handle different returns values from button
+        if isinstance(action, list):
+            action_id, action = action
+        elif isinstance(action, int):
+            action_id, action = action, None
+        else:
+            action_id, action = None, action
+
         self.reload(ids, written=True)
         if isinstance(action, str):
             self.client_action(action)
-        elif action:
-            Action.execute(action, {
+        if action_id:
+            Action.execute(action_id, {
                     'model': self.model_name,
-                    'id': self.current_record.id,
+                    'id': current_id,
                     'ids': ids,
                     }, context=self.context, keyword=True)
 
     def client_action(self, action):
         access = MODELACCESS[self.model_name]
+        # Coog : Allow multiple actions (review 10530001)
+        for single_action in action.split(','):
+            self.do_single_action(single_action, access)
+
+    def do_single_action(self, action, access):
         if action == 'new':
             if access['create']:
                 self.new()
@@ -1269,3 +1331,14 @@ class Screen(SignalEvent):
         return urllib.parse.urlunparse(('tryton',
                 CONFIG['login.host'],
                 '/'.join(path), query_string, '', ''))
+
+    def _force_count(self, search_string):
+        domain = self.search_domain(search_string, True)
+        context = self.context
+        if self.screen_container.but_active.get_active():
+            context['active_test'] = False
+        self.search_count = RPCExecute(
+            'model', self.model_name, 'search_count', domain, context=context)
+        self.signal('record-message',
+            (self.position, len(self.group) + self.offset,
+            self.search_count, self.current_record and self.current_record.id))

@@ -126,7 +126,7 @@ class Address(DeactivableMixin, sequence_ordered(), ModelSQL, ModelView):
         full_address = Template(AddressFormat.get_format(self)).substitute(
             **self._get_address_substitutions())
         return '\n'.join(
-            filter(None, (x.strip() for x in full_address.splitlines())))
+            [_f for _f in (x.strip() for x in full_address.splitlines()) if _f])
 
     def _get_address_substitutions(self):
         context = Transaction().context
@@ -181,13 +181,13 @@ class Address(DeactivableMixin, sequence_ordered(), ModelSQL, ModelView):
         else:
             country = None
         return ', '.join(
-            filter(None, [
+            [_f for _f in [
                     party,
                     self.name,
                     street,
                     self.zip,
                     self.city,
-                    country]))
+                    country] if _f])
 
     @classmethod
     def search_rec_name(cls, name, clause):

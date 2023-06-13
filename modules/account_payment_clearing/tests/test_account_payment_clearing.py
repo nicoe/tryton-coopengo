@@ -11,7 +11,7 @@ from trytond.tests.test_tryton import doctest_checker
 class AccountPaymentTestCase(ModuleTestCase):
     'Test Account Payment module'
     module = 'account_payment_clearing'
-    extras = ['account_statement', 'account_statement_rule']
+    extras = ['account_statement']  # , 'account_statement_rule']
 
 
 def suite():
@@ -25,6 +25,11 @@ def suite():
             optionflags=doctest.REPORT_ONLY_FIRST_FAILURE))
     suite.addTests(doctest.DocFileSuite(
             'scenario_account_negative_payment_clearing.rst',
+            tearDown=doctest_teardown, encoding='utf-8',
+            checker=doctest_checker,
+            optionflags=doctest.REPORT_ONLY_FIRST_FAILURE))
+    suite.addTests(doctest.DocFileSuite(
+            'scenario_invoice_amount_to_pay.rst',
             tearDown=doctest_teardown, encoding='utf-8',
             checker=doctest_checker,
             optionflags=doctest.REPORT_ONLY_FIRST_FAILURE))

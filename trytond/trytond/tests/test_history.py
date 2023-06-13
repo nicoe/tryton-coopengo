@@ -411,6 +411,8 @@ class HistoryTestCase(unittest.TestCase):
         history.value = 2
         history.save()
 
+        second_bis_stamp = history.write_date
+
         Line.delete([Line(line_b_id)])
 
         line_a = Line(line_a_id)
@@ -440,6 +442,13 @@ class HistoryTestCase(unittest.TestCase):
         self.assertEqual(history.stamp, first_stamp)
         self.assertEqual(
             [l.name for l in history.lines_at_stamp], ['a', 'b'])
+
+        # COOG - JCA : Test _datetime_exclude
+        with Transaction().set_context(_datetime=second_bis_stamp,
+                _datetime_exclude=True):
+            history = History(history_id)
+        self.assertEqual(history.value, 1)
+        self.assertEqual([l.name for l in history.lines], ['a', 'b'])
 
     @with_transaction()
     def test_search_cursor_max(self):

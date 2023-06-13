@@ -17,6 +17,7 @@ class View(object):
     modified = None
     editable = None
     children_field = None
+    children_definitions = None
     scroll = None
     xml_parser = None
 
@@ -60,7 +61,8 @@ class View(object):
         raise NotImplementedError
 
     @staticmethod
-    def parse(screen, view_id, view_type, xml, children_field):
+    def parse(screen, view_id, view_type, xml, children_field,
+            children_definitions=None):
         from .list import ViewTree
         from .form import ViewForm
         from .graph import ViewGraph
@@ -69,7 +71,8 @@ class View(object):
 
         root, = xml.childNodes
         if view_type == 'tree':
-            return ViewTree(view_id, screen, root, children_field)
+            return ViewTree(view_id, screen, root, children_field,
+                children_definitions)
         elif view_type == 'form':
             return ViewForm(view_id, screen, root)
         elif view_type == 'graph':
@@ -117,7 +120,7 @@ class XMLViewParser:
                     'relation_field', 'views', 'invisible', 'add_remove',
                     'sort', 'context', 'size', 'filename', 'autocomplete',
                     'translate', 'create', 'delete', 'selection_change_with',
-                    'schema_model', 'required', 'order']:
+                    'schema_model', 'required']:
                 if name in field:
                     node_attrs.setdefault(name, field[name])
         return node_attrs

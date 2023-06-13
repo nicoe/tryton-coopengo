@@ -38,7 +38,6 @@ Create chart of accounts::
     >>> receivable = accounts['receivable']
     >>> payable = accounts['payable']
     >>> cash = accounts['cash']
-    >>> expense = accounts['expense']
 
     >>> Account = Model.get('account.account')
     >>> bank_clearing = Account(parent=payable.parent)
@@ -49,13 +48,13 @@ Create chart of accounts::
     >>> bank_clearing.save()
 
     >>> Journal = Model.get('account.journal')
-    >>> expense_journal, = Journal.find([('code', '=', 'EXP')])
+    >>> expense, = Journal.find([('code', '=', 'EXP')])
 
 Create payment journal::
 
     >>> PaymentJournal = Model.get('account.payment.journal')
     >>> payment_journal = PaymentJournal(name='Manual',
-    ...     process_method='manual', clearing_journal=expense_journal,
+    ...     process_method='manual', clearing_journal=expense,
     ...     clearing_account=bank_clearing)
     >>> payment_journal.save()
 
@@ -69,7 +68,7 @@ Create payable move::
 
     >>> Move = Model.get('account.move')
     >>> move = Move()
-    >>> move.journal = expense_journal
+    >>> move.journal = expense
     >>> line = move.lines.new(account=payable, party=supplier,
     ...     debit=Decimal('-50.00'))
     >>> line = move.lines.new(account=expense, credit=Decimal('-50.00'))

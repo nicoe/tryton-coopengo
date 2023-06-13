@@ -31,9 +31,11 @@ class SelectionMixin(object):
             try:
                 if self.attrs.get('selection_change_with'):
                     selection = RPCExecute('model', self.model_name, selection,
-                        value)
+                        value, process_exception=False)
                 else:
-                    selection = RPCExecute('model', self.model_name, selection)
+                    selection = RPCExecute(
+                        'model', self.model_name, selection,
+                        process_exception=False)
             except RPCException:
                 selection = []
             self._values2selection[key] = selection
@@ -44,7 +46,7 @@ class SelectionMixin(object):
         self.selection = selection[:]
         self.inactive_selection = []
 
-    def update_selection(self, record, field):
+    def update_selection(self, record, field, process_exception=True):
         if not field:
             return
 
@@ -67,7 +69,7 @@ class SelectionMixin(object):
             try:
                 result = RPCExecute('model', self.attrs['relation'],
                     'search_read', domain, 0, None, None, ['rec_name'],
-                    context=context)
+                    context=context, process_exception=process_exception)
             except RPCException:
                 result = False
             if isinstance(result, list):
@@ -134,7 +136,7 @@ def freeze_value(value):
     if isinstance(value, dict):
         return tuple(sorted((k, freeze_value(v))
                 for k, v in value.items()))
-    elif isinstance(value, (list, set)):
+    elif isinstance(value, (list, set, tuple)):
         return tuple(freeze_value(v) for v in value)
     else:
         return value

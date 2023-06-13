@@ -18,6 +18,7 @@ from trytond.tools.domain_inversion import (
     domain_inversion, parse, simplify, merge, concat, unique_value,
     eval_domain, localize_domain,
     prepare_reference_domain, extract_reference_models)
+from trytond.tools.logging import format_args
 
 
 class ToolsTestCase(unittest.TestCase):
@@ -254,6 +255,68 @@ class StringPartitionedTestCase(unittest.TestCase):
 
         self.assertEqual(s, 'barfoo')
         self.assertEqual(list(s), ['bar', 'foo'])
+
+    def test_format_args(self):
+        "Test format_args"
+        for args, kwargs, short_form, long_form in [
+                (tuple(), {}, "()", "()"),
+                (('abcdefghijklmnopqrstuvwxyz',), {},
+                    "('abcdefghijklmnopq...')",
+                    "('abcdefghijklmnopqrstuvwxyz')"),
+                ((b'foo',), {}, "(<3 bytes>)", "(b'foo')"),
+                (([1, 2, 3, 4], [4, 5, 6, 7], [8, 9, 10, 11]), {},
+                    "([1, 2, 3, 4], [4, 5, 6, 7], [8, 9, 10, 11])",
+                    "([1, 2, 3, 4], [4, 5, 6, 7], [8, 9, 10, 11])"),
+                (([1, 2, 3, 4, 5, 6], [4, 5, 6, 7], [8, 9, 10, 11]), {},
+                    "([1, 2, 3, 4, 5, ...], [4, 5, 6, 7], [8, 9, 10, 11])",
+                    "([1, 2, 3, 4, 5, 6], [4, 5, 6, 7], [8, 9, 10, 11])"),
+                (([1, 2, 3], 'foo'), {'a': '1'},
+                    "([1, 2, 3], 'foo', a='1')",
+                    "([1, 2, 3], 'foo', a='1')"),
+                ((list(range(5)),), {},
+                    "([0, 1, 2, 3, 4])",
+                    "([0, 1, 2, 3, 4])"),
+                ((list(range(6)),), {},
+                    "([0, 1, 2, 3, 4, ...])",
+                    "([0, 1, 2, 3, 4, 5])"),
+                (('a', 'b', 'c', 'd'), {},
+                    "('a', 'b', 'c', ...)", "('a', 'b', 'c', 'd')"),
+                (([1, [2, [3, [4, [5, [6]]]]]],), {},
+                    "([1, [2, [3, [4, [5, ...]]]]])",
+                    "([1, [2, [3, [4, [5, [6]]]]]])"),
+                (tuple(), {'a': 1, 'b': 2}, "(a=1, b=2)", "(a=1, b=2)"),
+                ((list(range(10)), 'foo'), {'a': '1'},
+                    "([0, 1, 2, 3, 4, ...], 'foo', a='1')",
+                    "([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 'foo', a='1')"),
+                ((list(range(4)), 'foo'), {k: k for k in 'abcdefg'},
+                    "([0, 1, 2, 3], 'foo', a='a', ...)",
+                    "([0, 1, 2, 3], 'foo', a='a', b='b', c='c', d='d',"
+                    " e='e', f='f', g='g')"),
+                ((list(range(5)), list(range(20, 25))),
+                    {k: list(range(7)) for k in 'ab'},
+                    "([0, 1, 2, 3, 4], [20, 21, 22, 23, 24], "
+                    "a=[0, 1, 2, 3, 4, ...], ...)",
+                    "([0, 1, 2, 3, 4], [20, 21, 22, 23, 24], "
+                    "a=[0, 1, 2, 3, 4, 5, 6], b=[0, 1, 2, 3, 4, 5, 6])"),
+                (tuple(), {k: {i: i for i in range(7)} for k in 'abcd'},
+                    "(a={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, ...}, "
+                    "b={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, ...}, "
+                    "c={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, ...}, ...)",
+                    "(a={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}, "
+                    "b={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}, "
+                    "c={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6}, "
+                    "d={0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6})"),
+                ]:
+            with self.subTest(form='short', args=args, kwargs=kwargs):
+                self.assertEqual(
+                    str(format_args(args, kwargs, max_args=3, max_items=5)),
+                    short_form)
+            with self.subTest(form='long', args=args, kwargs=kwargs):
+                self.assertEqual(
+                    str(format_args(
+                            args, kwargs, verbose=True, max_args=3,
+                            max_items=5)),
+                    long_form)
 
 
 class LazyStringTestCase(unittest.TestCase):
@@ -701,73 +764,20 @@ class DomainInversionTestCase(unittest.TestCase):
         self.assertEqual(
             localize_domain(domain, 'x', True), [['b.c', '=', 1, 'z']])
 
-    @unittest.skipIf(
-        sys.version_info < (3, 6), "comparison relies on dict insertion order")
     def test_prepare_reference_domain(self):
         domain = [['x', 'like', 'A%']]
         self.assertEqual(
             prepare_reference_domain(domain, 'x'),
-            [[]])
+            [['x', 'like', 'A%']])
 
-        domain = [['x', '=', 'A']]
+        domain = [['x.y', 'like', 'A%', 'model']]
         self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [[]])
+            prepare_reference_domain(domain, 'x'), [['y', 'like', 'A%']])
 
         domain = [['x.y', 'child_of', [1], 'model', 'parent']]
         self.assertEqual(
             prepare_reference_domain(domain, 'x'),
-            [['x.y', 'child_of', [1], 'model', 'parent']])
-
-        domain = [['x.y', 'like', 'A%', 'model']]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['x.y', 'like', 'A%', 'model']])
-
-        domain = [['x', '=', 'model,1']]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['x.id', '=', 1, 'model']])
-
-        domain = [['x', '!=', 'model,1']]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['x.id', '!=', 1, 'model']])
-
-        domain = [['x', '=', 'model,%']]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['x.id', '!=', None, 'model']])
-
-        domain = [['x', '!=', 'model,%']]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['x', 'not like', 'model,%']])
-
-        domain = [['x', 'in',
-                ['model_a,1', 'model_b,%', 'model_c,3', 'model_a,2']]]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['OR',
-                ['x.id', 'in', [1, 2], 'model_a'],
-                ['x.id', '!=', None, 'model_b'],
-                ['x.id', 'in', [3], 'model_c'],
-                ]])
-
-        domain = [['x', 'not in',
-                ['model_a,1', 'model_b,%', 'model_c,3', 'model_a,2']]]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [['AND',
-                ['x.id', 'not in', [1, 2], 'model_a'],
-                ['x', 'not like', 'model_b,%'],
-                ['x.id', 'not in', [3], 'model_c'],
-                ]])
-
-        domain = [['x', 'in', ['model_a,1', 'foo']]]
-        self.assertEqual(
-            prepare_reference_domain(domain, 'x'),
-            [[]])
+            [['y', 'child_of', [1], 'parent']])
 
     def test_extract_models(self):
         domain = [['x', 'like', 'A%']]

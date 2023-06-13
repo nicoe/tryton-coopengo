@@ -82,8 +82,10 @@
                     {}, context,
                     decoder.decode( action.pyson_context || '{}'));
                 ctx = jQuery.extend(ctx, params.context);
+                // [Coog Specific] handle extra_context
+                ctx = jQuery.extend(ctx, data.extra_context || {});
 
-                ctx.context = ctx;
+                ctx.context = Sao.common.clone(ctx);
                 decoder = new Sao.PYSON.Decoder(ctx);
                 params.domain = decoder.decode(action.pyson_domain);
                 params.order = decoder.decode(action.pyson_order);
@@ -92,7 +94,7 @@
                 params.tab_domain = [];
                 action.domains.forEach(function(element, index) {
                     params.tab_domain.push(
-                        [element[0], decoder.decode(element[1]), element[2]]);
+                        [element[0], [ctx, element[1]], element[2]]);
                 });
                 name_prm = jQuery.when(action.name);
                 params.model = action.res_model || data.res_model;
@@ -118,6 +120,9 @@
                 params.action = action.wiz_name;
                 params.data = data;
                 params.context = context;
+                // [Coog Specific] handle extra_context
+                params.context = jQuery.extend(
+                    params.context, data.extra_context || {});
                 params.window = action.window;
                 name_prm = jQuery.when(action.name);
                 if ((action.keyword || 'form_action') === 'form_action') {

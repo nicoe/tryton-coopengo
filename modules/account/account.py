@@ -7,7 +7,7 @@ from functools import wraps
 
 from dateutil.relativedelta import relativedelta
 from sql import Column, Null, Window, Literal
-from sql.aggregate import Sum, Max
+from sql.aggregate import Count, Sum, Max, Min
 from sql.conditionals import Coalesce, Case
 
 from trytond.i18n import gettext
@@ -580,10 +580,10 @@ class AccountTemplate(
     def __register__(cls, module_name):
         super().__register__(module_name)
 
+        # Drop the required constraint on 'kind'
         table_h = cls.__table_handler__(module_name)
-
-        # Migration from 5.0: remove kind
-        table_h.drop_column('kind')
+        if table_h.column_exist('kind'):
+            table_h.not_null_action('kind', 'remove')
 
     def _get_account_value(self, account=None):
         '''
@@ -791,6 +791,8 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
                 },
             depends=['second_currency_digits', 'second_currency']),
         'get_credit_debit')
+    line_count = fields.Function(
+        fields.Integer("Line Count"), 'get_credit_debit')
     note = fields.Text('Note')
     deferrals = fields.One2Many(
         'account.account.deferral', 'account', "Deferrals", readonly=True,
@@ -839,10 +841,10 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
     def __register__(cls, module_name):
         super().__register__(module_name)
 
+        # Drop the required constraint on 'kind'
         table_h = cls.__table_handler__(module_name)
-
-        # Migration from 5.0: remove kind
-        table_h.drop_column('kind')
+        if table_h.column_exist('kind'):
+            table_h.not_null_action('kind', 'remove')
 
     @classmethod
     def validate(cls, accounts):
@@ -933,16 +935,21 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
         result = {}
         ids = [a.id for a in accounts]
         for name in names:
-            if name not in {'credit', 'debit', 'amount_second_currency'}:
+            if name not in {
+                    'credit', 'debit', 'amount_second_currency', 'line_count'}:
                 raise ValueError('Unknown name: %s' % name)
-            result[name] = dict((i, Decimal(0)) for i in ids)
+            col_type = int if name == 'line_count' else Decimal
+            result[name] = dict((i, col_type(0)) for i in ids)
 
         table = cls.__table__()
         line = MoveLine.__table__()
         line_query, fiscalyear_ids = MoveLine.query_get(line)
         columns = [table.id]
         for name in names:
-            columns.append(Sum(Coalesce(Column(line, name), 0)))
+            if name == 'line_count':
+                columns.append(Count(Literal(1)))
+            else:
+                columns.append(Sum(Coalesce(Column(line, name), 0)))
         for sub_ids in grouped_slice(ids):
             red_sql = reduce_ids(table.id, sub_ids)
             cursor.execute(*table.join(line, 'LEFT',
@@ -954,12 +961,15 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
                 account_id = row[0]
                 for i, name in enumerate(names, 1):
                     # SQLite uses float for SUM
-                    if not isinstance(row[i], Decimal):
+                    if (name != 'line_count'
+                            and not isinstance(row[i], Decimal)):
                         result[name][account_id] = Decimal(str(row[i]))
                     else:
                         result[name][account_id] = row[i]
         for account in accounts:
             for name in names:
+                if name == 'line_count':
+                    continue
                 if name == 'amount_second_currency':
                     exp = Decimal(str(10.0 ** -account.second_currency_digits))
                 else:
@@ -980,14 +990,15 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
             return result
 
     @classmethod
-    def _cumulate(cls, fiscalyears, accounts, names, values, func):
+    def _cumulate(
+            cls, fiscalyears, accounts, names, values, func,
+            deferral='account.account.deferral'):
         """
         Cumulate previous fiscalyear values into values
         func is the method to compute values
         """
         pool = Pool()
         FiscalYear = pool.get('account.fiscalyear')
-        Deferral = pool.get('account.account.deferral')
 
         youngest_fiscalyear = None
         for fiscalyear in fiscalyears:
@@ -1008,7 +1019,8 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
         if not fiscalyear:
             return values
 
-        if fiscalyear.state == 'close':
+        if fiscalyear.state == 'close' and deferral:
+            Deferral = pool.get(deferral)
             id2deferral = {}
             ids = [a.id for a in accounts]
             for sub_ids in grouped_slice(ids):
@@ -1236,6 +1248,206 @@ class Account(AccountMixin(), ActivePeriodMixin, tree(), ModelSQL, ModelView):
             return self
 
 
+class AccountParty(ActivePeriodMixin, ModelSQL):
+    "Account Party"
+    __name__ = 'account.account.party'
+    account = fields.Many2One('account.account', "Account")
+    party = fields.Many2One('party.party', "Party")
+    name = fields.Char("Name")
+    code = fields.Char("Code")
+    company = fields.Many2One('company.company', "Company")
+    type = fields.Many2One('account.account.type', "Type")
+    debit_type = fields.Many2One('account.account.type', "Debit Type")
+    closed = fields.Boolean("Closed")
+
+    balance = fields.Function(fields.Numeric(
+            "Balance", digits=(16, Eval('currency_digits', 2)),
+            depends=['currency_digits']),
+        'get_balance')
+    credit = fields.Function(fields.Numeric(
+            "Credit", digits=(16, Eval('currency_digits', 2)),
+            depends=['currency_digits']),
+        'get_credit_debit')
+    debit = fields.Function(fields.Numeric(
+            "Debit", digits=(16, Eval('currency_digits', 2)),
+            depends=['currency_digits']),
+        'get_credit_debit')
+    line_count = fields.Function(
+        fields.Integer("Line Count"), 'get_credit_debit')
+    amount_second_currency = fields.Function(fields.Numeric(
+            "Amount Second Currency",
+            digits=(16, Eval('second_currency_digits', 2)),
+            states={
+                'invisible': ~Eval('second_currency'),
+                },
+            depends=['second_currency_digits', 'second_currency']),
+        'get_credit_debit')
+    second_currency = fields.Many2One(
+        'currency.currency', "Secondary Currency")
+
+    currency_digits = fields.Function(
+        fields.Integer("Currency Digits"), 'get_currency_digits')
+    second_currency_digits = fields.Function(fields.Integer(
+            "Second Currency Digits"), 'get_second_currency_digits')
+
+    @classmethod
+    def table_query(cls):
+        pool = Pool()
+        Line = pool.get('account.move.line')
+        Account = pool.get('account.account')
+        line = Line.__table__()
+        account = Account.__table__()
+
+        account_party = line.select(
+                Min(line.id).as_('id'), line.account, line.party,
+                where=line.party != Null,
+                group_by=(line.account, line.party))
+
+        columns = []
+        for fname, field in cls._fields.items():
+            if not hasattr(field, 'set'):
+                if fname in {'id', 'account', 'party'}:
+                    column = Column(account_party, fname)
+                else:
+                    column = Column(account, fname)
+                columns.append(column.as_(fname))
+        return (
+            account_party.join(
+                account, condition=account_party.account == account.id)
+            .select(
+                *columns,
+                where=account.party_required))
+
+    @classmethod
+    def get_balance(cls, records, name):
+        pool = Pool()
+        Account = pool.get('account.account')
+        MoveLine = pool.get('account.move.line')
+        FiscalYear = pool.get('account.fiscalyear')
+        cursor = Transaction().connection.cursor()
+
+        table_a = Account.__table__()
+        table_c = Account.__table__()
+        line = MoveLine.__table__()
+        ids = [a.id for a in records]
+        account_ids = {a.account.id for a in records}
+        party_ids = {a.party.id for a in records}
+        account_party2id = {(a.account.id, a.party.id): a.id for a in records}
+        balances = dict((i, Decimal(0)) for i in ids)
+        line_query, fiscalyear_ids = MoveLine.query_get(line)
+        for sub_account_ids in grouped_slice(account_ids):
+            account_sql = reduce_ids(table_a.id, sub_account_ids)
+            for sub_party_ids in grouped_slice(party_ids):
+                party_sql = reduce_ids(line.party, sub_party_ids)
+                cursor.execute(*table_a.join(table_c,
+                        condition=(table_c.left >= table_a.left)
+                        & (table_c.right <= table_a.right)
+                        ).join(line, condition=line.account == table_c.id
+                        ).select(
+                        table_a.id,
+                        line.party,
+                        Sum(
+                            Coalesce(line.debit, 0)
+                            - Coalesce(line.credit, 0)),
+                        where=account_sql & party_sql & line_query,
+                        group_by=[table_a.id, line.party]))
+                for account_id, party_id, balance in cursor:
+                    id_ = account_party2id[(account_id, party_id)]
+                    balances[id_] = balance
+
+        for record in records:
+            # SQLite uses float for SUM
+            if not isinstance(balances[record.id], Decimal):
+                balances[record.id] = Decimal(str(balances[record.id]))
+            exp = Decimal(str(10.0 ** -record.currency_digits))
+            balances[record.id] = balances[record.id].quantize(exp)
+
+        fiscalyears = FiscalYear.browse(fiscalyear_ids)
+
+        def func(records, names):
+            return {names[0]: cls.get_balance(records, names[0])}
+        return Account._cumulate(
+            fiscalyears, records, [name], {name: balances}, func,
+            deferral=None)[name]
+
+    @classmethod
+    def get_credit_debit(cls, records, names):
+        pool = Pool()
+        Account = pool.get('account.account')
+        MoveLine = pool.get('account.move.line')
+        FiscalYear = pool.get('account.fiscalyear')
+        cursor = Transaction().connection.cursor()
+
+        result = {}
+        ids = [a.id for a in records]
+        for name in names:
+            if name not in {
+                    'credit', 'debit', 'amount_second_currency', 'line_count'}:
+                raise ValueError('Unknown name: %s' % name)
+            column_type = int if name == 'line_count' else Decimal
+            result[name] = dict((i, column_type(0)) for i in ids)
+
+        account_ids = {a.account.id for a in records}
+        party_ids = {a.party.id for a in records}
+        account_party2id = {(a.account.id, a.party.id): a.id for a in records}
+        table = Account.__table__()
+        line = MoveLine.__table__()
+        line_query, fiscalyear_ids = MoveLine.query_get(line)
+        columns = [table.id, line.party]
+        for name in names:
+            if name == 'line_count':
+                columns.append(Count(Literal(1)))
+            else:
+                columns.append(Sum(Coalesce(Column(line, name), 0)))
+        for sub_account_ids in grouped_slice(account_ids):
+            account_sql = reduce_ids(table.id, sub_account_ids)
+            for sub_party_ids in grouped_slice(party_ids):
+                party_sql = reduce_ids(line.party, sub_party_ids)
+                cursor.execute(*table.join(line, 'LEFT',
+                        condition=line.account == table.id
+                        ).select(*columns,
+                        where=account_sql & party_sql & line_query,
+                        group_by=[table.id, line.party]))
+                for row in cursor:
+                    id_ = account_party2id[tuple(row[0:2])]
+                    for i, name in enumerate(names, 2):
+                        # SQLite uses float for SUM
+                        if (name != 'line_count'
+                                and not isinstance(row[i], Decimal)):
+                            result[name][id_] = Decimal(str(row[i]))
+                        else:
+                            result[name][id_] = row[i]
+        for record in records:
+            for name in names:
+                if name == 'line_count':
+                    continue
+                if name == 'amount_second_currency':
+                    exp = Decimal(str(10.0 ** -record.second_currency_digits))
+                else:
+                    exp = Decimal(str(10.0 ** -record.currency_digits))
+                result[name][record.id] = (
+                    result[name][record.id].quantize(exp))
+
+        cumulate_names = []
+        if Transaction().context.get('cumulate'):
+            cumulate_names = names
+        elif 'amount_second_currency' in names:
+            cumulate_names = ['amount_second_currency']
+        if cumulate_names:
+            fiscalyears = FiscalYear.browse(fiscalyear_ids)
+            return Account._cumulate(
+                fiscalyears, records, cumulate_names, result,
+                cls.get_credit_debit, deferral=None)
+        else:
+            return result
+
+    def get_currency_digits(self, name):
+        return self.company.currency.digits
+
+    def get_second_currency_digits(self, name):
+        return self.account.second_currency_digits
+
+
 class AccountDeferral(ModelSQL, ModelView):
     '''
     Account Deferral
@@ -1251,6 +1463,7 @@ class AccountDeferral(ModelSQL, ModelView):
         required=True, depends=['currency_digits'])
     credit = fields.Numeric('Credit', digits=(16, Eval('currency_digits', 2)),
         required=True, depends=['currency_digits'])
+    line_count = fields.Integer("Line Count", required=True)
     balance = fields.Function(fields.Numeric('Balance',
             digits=(16, Eval('currency_digits', 2)),
             depends=['currency_digits']), 'get_balance')
@@ -1282,6 +1495,10 @@ class AccountDeferral(ModelSQL, ModelView):
     @classmethod
     def default_amount_second_currency(cls):
         return Decimal(0)
+
+    @classmethod
+    def default_line_count(cls):
+        return 0
 
     def get_balance(self, name):
         return self.debit - self.credit
@@ -1366,40 +1583,55 @@ class OpenChartAccount(Wizard):
         return 'end'
 
 
-class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
-    'General Ledger Account'
-    __name__ = 'account.general_ledger.account'
+class _GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
 
-    # TODO reuse rec_name of Account
-    name = fields.Char('Name')
-    code = fields.Char('Code')
+    account = fields.Many2One('account.account', "Account")
     company = fields.Many2One('company.company', 'Company')
-    type = fields.Many2One('account.account.type', 'Type')
-    debit_type = fields.Many2One('account.account.type', 'Debit Type')
     start_debit = fields.Function(fields.Numeric('Start Debit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_account', searcher='search_account')
     debit = fields.Function(fields.Numeric('Debit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_debit_credit', searcher='search_debit_credit')
     end_debit = fields.Function(fields.Numeric('End Debit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_account', searcher='search_account')
     start_credit = fields.Function(fields.Numeric('Start Credit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_account', searcher='search_account')
     credit = fields.Function(fields.Numeric('Credit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_debit_credit', searcher='search_debit_credit')
     end_credit = fields.Function(fields.Numeric('End Credit',
             digits=(16, Eval('currency_digits', 2)),
-            depends=['currency_digits']),
+            states={
+                'invisible': Eval('line_count', -1) == 0,
+                },
+            depends=['currency_digits', 'line_count']),
         'get_account', searcher='search_account')
+    line_count = fields.Function(
+        fields.Integer("Line Count"),
+        'get_debit_credit', searcher='search_debit_credit')
     start_balance = fields.Function(fields.Numeric('Start Balance',
             digits=(16, Eval('currency_digits', 2)),
             depends=['currency_digits']),
@@ -1408,28 +1640,28 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
             digits=(16, Eval('currency_digits', 2)),
             depends=['currency_digits']),
         'get_account', searcher='search_account')
-    lines = fields.One2Many('account.general_ledger.line', 'account', 'Lines',
-        readonly=True)
-    general_ledger_balance = fields.Boolean('General Ledger Balance')
     currency_digits = fields.Function(fields.Integer('Currency Digits'),
         'get_currency_digits')
 
     @classmethod
     def __setup__(cls):
-        super(GeneralLedgerAccount, cls).__setup__()
-        cls._order.insert(0, ('code', 'ASC'))
-        cls._order.insert(1, ('name', 'ASC'))
+        super().__setup__()
+        cls._order.insert(0, ('account', 'ASC'))
 
     @classmethod
     def table_query(cls):
-        pool = Pool()
         context = Transaction().context
-        Account = pool.get('account.account')
+        Account = cls._get_account()
         account = Account.__table__()
         columns = []
         for fname, field in cls._fields.items():
             if not hasattr(field, 'set'):
-                columns.append(Column(account, fname).as_(fname))
+                if (isinstance(field, fields.Many2One)
+                        and field.get_target() == Account):
+                    column = Column(account, 'id')
+                else:
+                    column = Column(account, fname)
+                columns.append(column.as_(fname))
         return account.select(*columns,
             where=(account.company == context.get('company'))
             & (account.type != Null)
@@ -1487,11 +1719,18 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
 
     @classmethod
     def get_account(cls, records, name):
-        pool = Pool()
-        Account = pool.get('account.account')
+        Account = cls._get_account()
 
-        period_ids = cls.get_period_ids(name)
-        from_date, to_date = cls.get_dates(name)
+        period_ids, from_date, to_date = None, None, None
+        context = Transaction().context
+        if context.get('start_period') or context.get('end_period'):
+            period_ids = cls.get_period_ids(name)
+        elif context.get('from_date') or context.get('end_date'):
+            from_date, to_date = cls.get_dates(name)
+        else:
+            if name.startswith('start_'):
+                period_ids = []
+
         with Transaction().set_context(
                 periods=period_ids,
                 from_date=from_date, to_date=to_date):
@@ -1505,8 +1744,7 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
 
     @classmethod
     def search_account(cls, name, domain):
-        pool = Pool()
-        Account = pool.get('account.account')
+        Account = cls._get_account()
 
         period_ids = cls.get_period_ids(name)
         with Transaction().set_context(periods=period_ids):
@@ -1535,11 +1773,11 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
 
     @classmethod
     def get_debit_credit(cls, records, name):
-        pool = Pool()
-        Account = pool.get('account.account')
+        Account = cls._get_account()
 
-        start_period_ids = cls.get_period_ids('start_%s' % name)
-        end_period_ids = cls.get_period_ids('end_%s' % name)
+        period_name = 'credit' if name == 'line_count' else name
+        start_period_ids = cls.get_period_ids('start_%s' % period_name)
+        end_period_ids = cls.get_period_ids('end_%s' % period_name)
         periods_ids = list(
             set(end_period_ids).difference(set(start_period_ids)))
         with Transaction().set_context(periods=periods_ids):
@@ -1548,11 +1786,11 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
 
     @classmethod
     def search_debit_credit(cls, name, domain):
-        pool = Pool()
-        Account = pool.get('account.account')
+        Account = cls._get_account()
 
-        start_period_ids = cls.get_period_ids('start_%s' % name)
-        end_period_ids = cls.get_period_ids('end_%s' % name)
+        period_name = 'credit' if name == 'line_count' else name
+        start_period_ids = cls.get_period_ids('start_%s' % period_name)
+        end_period_ids = cls.get_period_ids('end_%s' % period_name)
         periods_ids = list(
             set(end_period_ids).difference(set(start_period_ids)))
         with Transaction().set_context(periods=periods_ids):
@@ -1578,8 +1816,27 @@ class GeneralLedgerAccount(ActivePeriodMixin, ModelSQL, ModelView):
         return self.company.currency.digits
 
     def get_rec_name(self, name):
-        # TODO add start/end balance
-        return self.name
+        return self.account.rec_name
+
+    @classmethod
+    def search_rec_name(cls, name, clause):
+        return [('account.rec_name',) + tuple(clause[1:])]
+
+
+class GeneralLedgerAccount(_GeneralLedgerAccount):
+    'General Ledger Account'
+    __name__ = 'account.general_ledger.account'
+
+    type = fields.Many2One('account.account.type', "Type")
+    debit_type = fields.Many2One('account.account.type', "Debit Type")
+    lines = fields.One2Many(
+        'account.general_ledger.line', 'account', "Lines", readonly=True)
+    general_ledger_balance = fields.Boolean("General Ledger Balance")
+
+    @classmethod
+    def _get_account(cls):
+        pool = Pool()
+        return pool.get('account.account')
 
 
 class GeneralLedgerAccountContext(ModelView):
@@ -1591,27 +1848,42 @@ class GeneralLedgerAccountContext(ModelView):
         domain=[
             ('fiscalyear', '=', Eval('fiscalyear')),
             ('start_date', '<=', (Eval('end_period'), 'start_date')),
-            ], depends=['fiscalyear', 'end_period'])
+            ],
+        states={
+            'readonly': Eval('from_date', False) | Eval('to_date', False),
+            },
+        depends=['fiscalyear', 'end_period', 'from_date', 'to_date'])
     end_period = fields.Many2One('account.period', 'End Period',
         domain=[
             ('fiscalyear', '=', Eval('fiscalyear')),
             ('start_date', '>=', (Eval('start_period'), 'start_date'))
             ],
-        depends=['fiscalyear', 'start_period'])
+        states={
+            'readonly': Eval('from_date', False) | Eval('to_date', False),
+            },
+        depends=['fiscalyear', 'start_period', 'from_date', 'to_date'])
     from_date = fields.Date("From Date",
         domain=[
             If(Eval('to_date') & Eval('from_date'),
                 ('from_date', '<=', Eval('to_date')),
                 ()),
             ],
-        depends=['to_date'])
+        states={
+            'readonly': (Eval('start_period', 'False')
+                | Eval('end_period', False)),
+            },
+        depends=['to_date', 'start_period', 'end_period'])
     to_date = fields.Date("To Date",
         domain=[
             If(Eval('from_date') & Eval('to_date'),
                 ('to_date', '>=', Eval('from_date')),
                 ()),
             ],
-        depends=['from_date'])
+        states={
+            'readonly': (Eval('start_period', 'False')
+                | Eval('end_period', False)),
+            },
+        depends=['from_date', 'start_period', 'end_period'])
     company = fields.Many2One('company.company', 'Company', required=True)
     posted = fields.Boolean('Posted Move', help="Only included posted moves.")
 
@@ -1656,6 +1928,81 @@ class GeneralLedgerAccountContext(ModelView):
         if (self.end_period
                 and self.end_period.fiscalyear != self.fiscalyear):
             self.end_period = None
+
+    @fields.depends('start_period', 'end_period', 'from_date')
+    def on_change_with_from_date(self):
+        if self.start_period or self.end_period:
+            return None
+        return self.from_date
+
+    @fields.depends('start_period', 'end_period', 'to_date')
+    def on_change_with_to_date(self):
+        if self.start_period or self.end_period:
+            return None
+        return self.to_date
+
+    @fields.depends('from_date', 'to_date', 'start_period')
+    def on_change_with_start_period(self):
+        if self.from_date or self.to_date:
+            return None
+        return self.start_period
+
+    @fields.depends('from_date', 'to_date', 'end_period')
+    def on_change_with_end_period(self):
+        if self.from_date or self.to_date:
+            return None
+        return self.end_period
+
+
+class GeneralLedgerAccountParty(_GeneralLedgerAccount):
+    "General Ledger Account Party"
+    __name__ = 'account.general_ledger.account.party'
+
+    party = fields.Many2One('party.party', "Party")
+
+    @classmethod
+    def __setup__(cls):
+        super().__setup__()
+        cls._order.insert(2, ('party', 'ASC'))
+
+    @classmethod
+    def _get_account(cls):
+        pool = Pool()
+        return pool.get('account.account.party')
+
+    def get_rec_name(self, name):
+        return ' - '.join((self.account.rec_name, self.party.rec_name))
+
+    @classmethod
+    def search_rec_name(cls, name, clause):
+        if clause[1].startswith('!') or clause[1].startswith('not '):
+            bool_op = 'AND'
+        else:
+            bool_op = 'OR'
+        return [bool_op,
+            ('account.rec_name',) + tuple(clause[1:]),
+            ('party.rec_name',) + tuple(clause[1:]),
+            ]
+
+
+class OpenGeneralLedgerAccountParty(Wizard):
+    "Open General Ledger Account Party"
+    __name__ = 'account.general_ledger.account.party.open'
+    start_state = 'open'
+    open = StateAction('account.act_general_ledger_line_form')
+
+    def do_open(self, action):
+        action['name'] = '%s (%s)' % (action['name'], self.record.rec_name)
+        domain = [
+            ('account', '=', self.record.account.id),
+            ('party', '=', self.record.party.id),
+            ]
+        action['pyson_domain'] = PYSONEncoder().encode(domain)
+        action['context_model'] = 'account.general_ledger.account.context'
+        action['pyson_context'] = PYSONEncoder().encode({
+                'party_cumulate': True,
+                })
+        return action, {}
 
 
 class GeneralLedgerLine(ModelSQL, ModelView):
@@ -2410,7 +2757,6 @@ class UpdateChart(Wizard):
     @inactive_records
     def transition_update(self):
         pool = Pool()
-        Account = pool.get('account.account')
         TaxCode = pool.get('account.tax.code')
         TaxCodeTemplate = pool.get('account.tax.code.template')
         TaxCodeLine = pool.get('account.tax.code.line')
@@ -2423,8 +2769,7 @@ class UpdateChart(Wizard):
         TaxRuleLineTemplate = \
             pool.get('account.tax.rule.line.template')
 
-        # re-browse to have inactive context
-        account = Account(self.start.account.id)
+        account = self.start.account
         company = account.company
 
         # Update account types

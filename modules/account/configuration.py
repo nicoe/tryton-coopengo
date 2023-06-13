@@ -1,11 +1,13 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
+from trytond import backend
 from trytond.pool import Pool
 from trytond.model import ModelView, ModelSQL, ModelSingleton, fields
 from trytond.transaction import Transaction
 from trytond.pyson import Eval
 from trytond.modules.company.model import (
     CompanyMultiValueMixin, CompanyValueMixin)
+from trytond.tools.multivalue import migrate_property
 
 tax_roundings = [
     ('document', 'Per Document'),
@@ -65,6 +67,9 @@ class Configuration(
 class ConfigurationDefaultAccount(ModelSQL, CompanyValueMixin):
     "Account Configuration Default Account"
     __name__ = 'account.configuration.default_account'
+
+    configuration = fields.Many2One('account.configuration', 'Configuration',
+        ondelete='CASCADE', select=True)
     default_account_receivable = fields.Many2One(
         'account.account', "Default Account Receivable",
         domain=[
@@ -81,6 +86,24 @@ class ConfigurationDefaultAccount(ModelSQL, CompanyValueMixin):
             ('company', '=', Eval('company', -1)),
             ],
         depends=['company'])
+
+    @classmethod
+    def __register__(cls, module_name):
+        exist = backend.TableHandler.table_exist(cls._table)
+        super(ConfigurationDefaultAccount, cls).__register__(module_name)
+        if not exist:
+            cls._migrate_property([], [], [])
+
+    @classmethod
+    def _migrate_property(cls, field_names, value_names, fields):
+        field_names.extend(['account_receivable',
+                'account_payable'])
+        value_names.extend(['default_account_receivable',
+                'default_account_payable'])
+        fields.append('company')
+        migrate_property(
+            'party.party', field_names, cls, value_names,
+            fields=fields)
 
 
 class DefaultTaxRule(ModelSQL, CompanyValueMixin):
@@ -114,6 +137,7 @@ class ConfigurationTaxRounding(ModelSQL, CompanyValueMixin):
         sql_table = cls.__table__()
         cursor = Transaction().connection.cursor()
 
+        exist = backend.TableHandler.table_exist(cls._table)
         super(ConfigurationTaxRounding, cls).__register__(module_name)
 
         table = cls.__table_handler__(module_name)
@@ -123,6 +147,17 @@ class ConfigurationTaxRounding(ModelSQL, CompanyValueMixin):
             cursor.execute(*sql_table.update(
                     [sql_table.tax_rounding], [sql_table.method]))
             table.drop_column('method')
+        if not exist:
+            cls._migrate_property([], [], [])
+
+    @classmethod
+    def _migrate_property(cls, field_names, value_names, fields):
+        field_names.append('tax_rounding')
+        value_names.append('tax_rounding')
+        fields.append('company')
+        migrate_property(
+            'account.configuration', field_names, cls, value_names,
+            parent='configuration', fields=fields)
 
     @classmethod
     def default_tax_rounding(cls):

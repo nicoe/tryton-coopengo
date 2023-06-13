@@ -55,8 +55,7 @@ class Char(Widget, TranslateMixin, PopdownMixin):
         entry.set_property('activates_default', True)
         if self.record:
             field_size = self.record.expr_eval(self.attrs.get('size'))
-            entry.set_width_chars(
-                min(120, field_size or self.default_width_chars))
+            entry.set_width_chars(field_size or self.default_width_chars)
             entry.set_max_length(field_size or 0)
         return entry
 
@@ -79,6 +78,11 @@ class Char(Widget, TranslateMixin, PopdownMixin):
         if not combobox.get_child().has_focus():
             # Must be deferred because it triggers a display of the form
             GLib.idle_add(focus_out)
+
+    def _color_widget(self):
+        if self.autocomplete:
+            return self.entry.get_child()
+        return self.entry
 
     @property
     def modified(self):
@@ -121,8 +125,7 @@ class Char(Widget, TranslateMixin, PopdownMixin):
             size_entry = self.entry
         if self.record:
             field_size = self.record.expr_eval(self.attrs.get('size'))
-            size_entry.set_width_chars(
-                min(120, field_size or self.default_width_chars))
+            size_entry.set_width_chars(field_size or self.default_width_chars)
             size_entry.set_max_length(field_size or 0)
         else:
             size_entry.set_width_chars(self.default_width_chars)

@@ -35,6 +35,8 @@ from .form_gtk.multiselection import MultiSelection
 from .form_gtk.pyson import PYSON
 from .form_gtk.state_widget import (Label, VBox, Image, Frame, ScrolledWindow,
     Notebook, Expander, Link)
+from .form_gtk.sourceeditor import SourceView
+
 
 _ = gettext.gettext
 
@@ -184,6 +186,7 @@ class FormXMLViewParser(XMLViewParser):
         'reference': Reference,
         'richtext': RichTextBox,
         'selection': Selection,
+        'source': SourceView,  # Coopengo specific
         'sip': SIP,
         'text': TextBox,
         'time': Time,
@@ -226,8 +229,14 @@ class FormXMLViewParser(XMLViewParser):
             self.container.add(None, attributes)
             return
 
+        # RSE Display more useful info when trying to display unexisting field
+        if 'widget' not in attributes:
+            raise Exception('Unknown field %s' % attributes['name'])
         widget = self.WIDGETS[attributes['widget']](self.view, attributes)
         self.view.widgets[name].append(widget)
+
+        if attributes.get('group'):
+            group = attributes['group']
 
         if widget.expand:
             attributes.setdefault('yexpand', True)
@@ -493,7 +502,7 @@ class ViewForm(View):
             for w in widgets)
 
     def get_buttons(self):
-        return [b for b in self.state_widgets if isinstance(b, Button)]
+        return [b for b in self.state_widgets if isinstance(b, Gtk.Button)]
 
     def reset(self):
         record = self.record
@@ -505,18 +514,24 @@ class ViewForm(View):
                         field.get_state_attrs(record)['invalid'] = False
                         widget.display()
 
-    def display(self):
+    def display(self, force=False):
         record = self.record
         if record:
             # Force to set fields in record
             # Get first the lazy one from the view to reduce number of requests
-            fields = ((name, record.group.fields[name])
-                for name in self.widgets)
-            fields = (
-                (name,
-                    field.attrs.get('loading', 'eager') == 'eager',
-                    len(field.views))
-                for name, field in fields)
+            fields2set = set()
+            for name in self.widgets:
+                field = record.group.fields[name]
+                fields2set.add(name)
+                fields2set.update(f for f in field.attrs.get('depends', [])
+                    if (not f.startswith('_parent')
+                        and f in record.group.fields))
+            fields = []
+            for name in fields2set:
+                field = record.group.fields[name]
+                fields.append((name,
+                        field.attrs.get('loading', 'eager') == 'eager',
+                        len(field.views)))
             fields = sorted(fields, key=operator.itemgetter(1, 2))
             for field, _, _ in fields:
                 record[field].get(record)

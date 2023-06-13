@@ -13,13 +13,10 @@ _ = gettext.gettext
 
 def focusable_cells(column, editable=True):
     for cell in column.get_cells():
-        if (not editable
-                or (isinstance(cell, (
-                            Gtk.CellRendererText,
-                            Gtk.CellRendererCombo))
-                    and cell.get_property('editable'))
-                or (isinstance(cell, Gtk.CellRendererToggle)
-                    and cell.get_property('activatable'))):
+        if not editable or isinstance(cell, (
+                    Gtk.CellRendererText,
+                    Gtk.CellRendererCombo,
+                    Gtk.CellRendererToggle)):
             yield cell
 
 
@@ -51,7 +48,7 @@ class TreeView(Gtk.TreeView):
             if not column.name:
                 continue
             widget = self.view.get_column_widget(column)
-            field = record[column.name]
+            field = record.group.fields[column.name]
             field.state_set(record, states=('readonly', 'invisible'))
             invisible = field.get_state_attrs(record).get('invisible', False)
             if not column.get_visible():
@@ -81,9 +78,13 @@ class EditableTreeView(TreeView):
     leaving_events = leaving_record_events + (
         Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab, Gdk.KEY_KP_Enter)
 
+    def __init__(self, view, editable_open=False):
+        super().__init__(view)
+        self.editable_open = editable_open
+
     def on_quit_cell(
             self, current_record, column, renderer, value, callback=None):
-        field = current_record[column.name]
+        field = current_record.group.fields[column.name]
         widget = self.view.get_column_widget(column)
 
         # The value has not changed and is valid ... do nothing.
@@ -193,6 +194,9 @@ class EditableTreeView(TreeView):
                     model = entry.get_model()
                     index = entry.get_property('entry-text-column')
                     txt = model[active][index]
+                # It seems that the remove-widget signal is only sent when
+                # activating the combobox or when pressing escape.
+                GLib.idle_add(entry.emit, 'remove-widget')
             else:
                 return True
             keyval = event.keyval
@@ -270,7 +274,7 @@ class EditableTreeView(TreeView):
                 create=(event.keyval == Gdk.KEY_F3), value=value,
                 callback=callback)
         else:
-            field = record[column.name]
+            field = record.group.fields[column.name]
             if isinstance(entry, Gtk.Entry):
                 entry.set_max_length(int(field.attrs.get('size', 0)))
             record.modified_fields.setdefault(column.name)

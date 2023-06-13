@@ -98,12 +98,12 @@ def group_operator(tokens):
         yield cur
 
 
-def likify(value, escape='\\'):
+def likify(value):
     "Add % if needed"
     if not value:
         return '%'
-    escaped = value.replace(escape + '%', '').replace(escape + '_', '')
-    if '%' in escaped or '_' in escaped:
+    escaped = value.replace('%%', '__')
+    if '%' in escaped:
         return value
     else:
         return '%' + value + '%'
@@ -313,26 +313,20 @@ def format_value(field, value, target=None, context=None):
                 and (not isinstance(value, (int, float, Decimal))
                     or isinstance(value, bool))):
             return ''
-        digit = 0
         if isinstance(value, Decimal):
             cast = Decimal
         else:
             cast = float
         factor = cast(field.get('factor', 1))
-        string_ = str(value * factor)
-        if 'e' in string_:
-            string_, exp = string_.split('e')
-            digit -= int(exp)
-        if '.' in string_:
-            digit += len(string_.rstrip('0').split('.')[1])
+        try:
+            digit = len(str(value * factor).rstrip('0').split('.')[1])
+        except IndexError:
+            digit = 0
         return locale.localize(
             '{0:.{1}f}'.format(value * factor or 0, digit), True)
 
     def format_selection():
-        if isinstance(field['selection'], (tuple, list)):
-            selections = dict(field['selection'])
-        else:
-            selections = {}
+        selections = dict(field['selection'])
         return selections.get(value, value) or ''
 
     def format_reference():
@@ -344,13 +338,14 @@ def format_value(field, value, target=None, context=None):
     def format_datetime():
         if not value:
             return ''
+        format_ = (
+            date_format(context.get('date_format')) + ' ' + time_format(field))
         if not isinstance(value, datetime.datetime):
             time = datetime.datetime.combine(value, datetime.time.min)
         else:
             time = timezoned_date(value)
-        format_ = date_format(context.get('date_format'))
-        if time.time() != datetime.time.min:
-            format_ += ' ' + time_format(field)
+        if time.time() == datetime.time.min:
+            format_ = '%x'
         return time.strftime(format_)
 
     def format_date():
@@ -696,6 +691,8 @@ class DomainParser(object):
                 name = name[:-9]
             value = target
         if name == 'rec_name':
+            if type(value) is list:
+                return
             if operator == 'ilike':
                 escaped = value.replace('%%', '__')
                 if escaped.startswith('%') and escaped.endswith('%'):

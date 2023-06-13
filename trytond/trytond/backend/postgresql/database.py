@@ -16,6 +16,7 @@ try:
 except ImportError:
     pass
 from psycopg2 import connect, Binary
+from psycopg2.sql import SQL, Identifier
 from psycopg2.pool import ThreadedConnectionPool, PoolError
 from psycopg2.extensions import cursor
 from psycopg2.extensions import ISOLATION_LEVEL_REPEATABLE_READ
@@ -29,6 +30,11 @@ except ImportError:
 from psycopg2 import IntegrityError as DatabaseIntegrityError
 from psycopg2 import OperationalError as DatabaseOperationalError
 from psycopg2 import ProgrammingError
+try:
+    from psycopg2.errors import QueryCanceled as DatabaseTimeoutError
+except ModuleNotFoundError:
+    # Pypy
+    from psycopg2 import QueryCanceledError as DatabaseTimeoutError
 from psycopg2.extras import register_default_json, register_default_jsonb
 
 from sql import Flavor, Cast, For
@@ -39,7 +45,13 @@ from trytond.backend.database import DatabaseInterface, SQLType
 from trytond.config import config, parse_uri
 from trytond.tools.gevent import is_gevent_monkey_patched
 
-__all__ = ['Database', 'DatabaseIntegrityError', 'DatabaseOperationalError']
+# MAB: Performance analyser tools (See [ec1462afd])
+from trytond.perf_analyzer import analyze_before, analyze_after
+from trytond.perf_analyzer import logger as perf_logger
+
+
+__all__ = ['Database', 'DatabaseIntegrityError', 'DatabaseOperationalError',
+    'DatabaseTimeoutError']
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +60,9 @@ _timeout = config.getint('database', 'timeout')
 _minconn = config.getint('database', 'minconn', default=1)
 _maxconn = config.getint('database', 'maxconn', default=64)
 _default_name = config.get('database', 'default_name', default='template1')
+_slow_threshold = config.getfloat('database', 'log_time_threshold', default=-1)
+_slow_logging_enabled = _slow_threshold > 0 and logger.isEnabledFor(
+    logging.WARNING)
 
 
 def unescape_quote(s):
@@ -69,6 +84,47 @@ class LoggingCursor(cursor):
         cursor.execute(self, sql, args)
 
 
+class PerfCursor(cursor):
+    def execute(self, query, vars=None):
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(self.mogrify(query, vars))
+        try:
+            context = analyze_before(self)
+        except Exception:
+            perf_logger.exception('analyse_before failed')
+            context = None
+
+        # JCA: Log slow queries
+        if _slow_logging_enabled:
+            start = time.time()
+        ret = super(PerfCursor, self).execute(query, vars)
+        if _slow_logging_enabled:
+            end = time.time()
+            if end - start > _slow_threshold:
+                logger.warning('slow:(%s s):%s' % (
+                        end - start, self.mogrify(query, vars)))
+        if context is not None:
+            try:
+                analyze_after(*context)
+            except Exception:
+                perf_logger.exception('analyse_after failed')
+        return ret
+
+    def callproc(self, procname, vars=None):
+        try:
+            context = analyze_before(self)
+        except Exception:
+            perf_logger.exception('analyse_before failed')
+            context = None
+        ret = super(PerfCursor, self).callproc(procname, vars)
+        if context is not None:
+            try:
+                analyze_after(*context)
+            except Exception:
+                perf_logger.exception('analyse_after failed')
+        return ret
+
+
 class ForSkipLocked(For):
     def __str__(self):
         assert not self.nowait, "Can not use both NO WAIT and SKIP LOCKED"
@@ -77,7 +133,7 @@ class ForSkipLocked(For):
 
 class Unaccent(Function):
     __slots__ = ()
-    _function = 'unaccent'
+    _function = config.get('database', 'unaccent_function', default='unaccent')
 
 
 class AdvisoryLock(Function):
@@ -174,6 +230,7 @@ class Database(DatabaseInterface):
                     inst._connpool = ThreadedConnectionPool(
                         minconn, _maxconn, **cls._connection_params(name),
                         cursor_factory=LoggingCursor)
+                    logger.info('connected to "%s"', name)
                 except Exception:
                     logger.error(
                         'connection to "%s" failed', name, exc_info=True)
@@ -192,6 +249,8 @@ class Database(DatabaseInterface):
         uri = parse_uri(config.get('database', 'uri'))
         params = {
             'dbname': name,
+            'fallback_application_name': os.environ.get(
+                'TRYTOND_APPNAME', 'trytond'),
             }
         if uri.username:
             params['user'] = uri.username
@@ -203,10 +262,16 @@ class Database(DatabaseInterface):
             params['port'] = uri.port
         return params
 
+    def _kill_session_query(self, database_name):
+        return 'SELECT pg_terminate_backend(pg_stat_activity.pid) ' \
+            'FROM pg_stat_activity WHERE pg_stat_activity.datname = \'%s\'' \
+            ' AND pid <> pg_backend_pid();' % database_name
+
     def connect(self):
         return self
 
-    def get_connection(self, autocommit=False, readonly=False):
+    def get_connection(
+            self, autocommit=False, readonly=False, statement_timeout=None):
         for count in range(config.getint('database', 'retry'), -1, -1):
             try:
                 conn = self._connpool.getconn()
@@ -221,23 +286,31 @@ class Database(DatabaseInterface):
                 logger.error(
                     'connection to "%s" failed', self.name, exc_info=True)
                 raise
-        # We do not use set_session because psycopg2 < 2.7 and psycopg2cffi
-        # change the default_transaction_* attributes which breaks external
-        # pooling at the transaction level.
         if autocommit:
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         else:
             conn.set_isolation_level(ISOLATION_LEVEL_REPEATABLE_READ)
+        statements = []
         # psycopg2cffi does not have the readonly property
         if hasattr(conn, 'readonly'):
             conn.readonly = readonly
         elif not autocommit and readonly:
+            statements.append('SET TRANSACTION READ ONLY')
+        if statement_timeout:
+            statements.append(
+                'SET LOCAL statement_timeout=%s' % (statement_timeout * 1000))
+        if statements:
             cursor = conn.cursor()
-            cursor.execute('SET TRANSACTION READ ONLY')
+            cursor.execute(';'.join(statements))
+        conn.cursor_factory = PerfCursor
         return conn
 
     def put_connection(self, connection, close=False):
-        self._connpool.putconn(connection, close=close)
+        try:
+            self._connpool.putconn(connection, close=close)
+        except PoolError:
+            # When cleaning up, the pool may already be closed
+            pass
 
     def close(self):
         with self._lock:
@@ -248,14 +321,19 @@ class Database(DatabaseInterface):
     @classmethod
     def create(cls, connection, database_name, template='template0'):
         cursor = connection.cursor()
-        cursor.execute('CREATE DATABASE "' + database_name + '" '
-            'TEMPLATE "' + template + '" ENCODING \'unicode\'')
+        cursor.execute(
+            SQL(
+                "CREATE DATABASE {} TEMPLATE {} ENCODING 'unicode'")
+            .format(
+                Identifier(database_name),
+                Identifier(template)))
         connection.commit()
         cls._list_cache.clear()
 
     def drop(self, connection, database_name):
         cursor = connection.cursor()
-        cursor.execute('DROP DATABASE "' + database_name + '"')
+        cursor.execute(SQL("DROP DATABASE {}")
+            .format(Identifier(database_name)))
         self.__class__._list_cache.clear()
 
     def get_version(self, connection):
@@ -280,12 +358,10 @@ class Database(DatabaseInterface):
             res = []
             for db_name, in cursor:
                 try:
-                    conn = connect(**self._connection_params(db_name))
-                    try:
-                        with conn:
-                            if self._test(conn, hostname=hostname):
-                                res.append(db_name)
-                    finally:
+                    with connect(**self._connection_params(db_name)
+                            ) as conn:
+                        if self._test(conn, hostname=hostname):
+                            res.append(db_name)
                         conn.close()
                 except Exception:
                     logger.debug(
@@ -365,21 +441,23 @@ class Database(DatabaseInterface):
 
     def nextid(self, connection, table):
         cursor = connection.cursor()
-        cursor.execute("SELECT NEXTVAL('" + table + "_id_seq')")
+        cursor.execute("SELECT NEXTVAL(%s)", (table + '_id_seq',))
         return cursor.fetchone()[0]
 
     def setnextid(self, connection, table, value):
         cursor = connection.cursor()
-        cursor.execute("SELECT SETVAL('" + table + "_id_seq', %d)" % value)
+        cursor.execute("SELECT SETVAL(%s, %s)", (table + '_id_seq', value))
 
     def currid(self, connection, table):
         cursor = connection.cursor()
-        cursor.execute('SELECT last_value FROM "' + table + '_id_seq"')
+        cursor.execute(SQL("SELECT last_value FROM {}").format(
+                Identifier(table + '_id_seq')))
         return cursor.fetchone()[0]
 
     def lock(self, connection, table):
         cursor = connection.cursor()
-        cursor.execute('LOCK "%s" IN EXCLUSIVE MODE NOWAIT' % table)
+        cursor.execute(SQL('LOCK {} IN EXCLUSIVE MODE NOWAIT').format(
+                Identifier(table)))
 
     def lock_id(self, id, timeout=None):
         if not timeout:
@@ -517,35 +595,32 @@ class Database(DatabaseInterface):
             self, connection, name, number_increment=1, start_value=1):
         cursor = connection.cursor()
 
-        param = self.flavor.param
         cursor.execute(
-            'CREATE SEQUENCE "%s" '
-            'INCREMENT BY %s '
-            'START WITH %s'
-            % (name, param, param),
+            SQL("CREATE SEQUENCE {} INCREMENT BY %s START WITH %s").format(
+                Identifier(name)),
             (number_increment, start_value))
 
     def sequence_update(
             self, connection, name, number_increment=1, start_value=1):
         cursor = connection.cursor()
-        param = self.flavor.param
         cursor.execute(
-            'ALTER SEQUENCE "%s" '
-            'INCREMENT BY %s '
-            'RESTART WITH %s'
-            % (name, param, param),
+            SQL("ALTER SEQUENCE {} INCREMENT BY %s RESTART WITH %s").format(
+                Identifier(name)),
             (number_increment, start_value))
 
     def sequence_rename(self, connection, old_name, new_name):
         cursor = connection.cursor()
         if (self.sequence_exist(connection, old_name)
                 and not self.sequence_exist(connection, new_name)):
-            cursor.execute('ALTER TABLE "%s" RENAME TO "%s"'
-                % (old_name, new_name))
+            cursor.execute(
+                SQL("ALTER TABLE {} RENAME TO {}").format(
+                    Identifier(old_name),
+                    Identifier(new_name)))
 
     def sequence_delete(self, connection, name):
         cursor = connection.cursor()
-        cursor.execute('DROP SEQUENCE "%s"' % name)
+        cursor.execute(SQL("DROP SEQUENCE {}").format(
+                Identifier(name)))
 
     def sequence_next_number(self, connection, name):
         cursor = connection.cursor()
@@ -554,22 +629,23 @@ class Database(DatabaseInterface):
             cursor.execute(
                 'SELECT increment_by '
                 'FROM pg_sequences '
-                'WHERE sequencename=%s '
-                % self.flavor.param,
+                'WHERE sequencename=%s',
                 (name,))
             increment, = cursor.fetchone()
             cursor.execute(
-                'SELECT CASE WHEN NOT is_called THEN last_value '
-                'ELSE last_value + %s '
-                'END '
-                'FROM "%s"' % (self.flavor.param, name),
+                SQL(
+                    'SELECT CASE WHEN NOT is_called THEN last_value '
+                    'ELSE last_value + %s '
+                    'END '
+                    'FROM {}').format(Identifier(name)),
                 (increment,))
         else:
             cursor.execute(
-                'SELECT CASE WHEN NOT is_called THEN last_value '
-                'ELSE last_value + increment_by '
-                'END '
-                'FROM "%s"' % name)
+                SQL(
+                    'SELECT CASE WHEN NOT is_called THEN last_value '
+                    'ELSE last_value + increment_by '
+                    'END '
+                    'FROM {}').format(sequence=Identifier(name)))
         return cursor.fetchone()[0]
 
     def has_channel(self):

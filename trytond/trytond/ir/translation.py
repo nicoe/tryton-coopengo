@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 from collections import defaultdict
 from io import BytesIO
 from lxml import etree
+import logging
 
 import polib
 from sql import Column, Null, Literal
@@ -19,7 +20,7 @@ from relatorio.templates.opendocument import get_zip_file
 
 from trytond.exceptions import UserError
 from trytond.i18n import gettext
-from trytond.tools.string_ import LazyString, StringPartitioned
+from trytond.tools.string_ import LazyString
 from ..model import ModelView, ModelSQL, fields
 from ..wizard import Wizard, StateView, StateTransition, StateAction, \
     Button
@@ -31,6 +32,8 @@ from ..cache import Cache
 from ..config import config
 
 from trytond.ir.lang import get_parent_language as get_parent
+
+logger = logging.getLogger(name='trytond.translator')
 
 __all__ = ['Translation',
     'TranslationSetStart', 'TranslationSetSucceed', 'TranslationSet',
@@ -327,32 +330,6 @@ class Translation(ModelSQL, ModelView):
                 else:
                     name = record.model + ',' + field_name
                 translations[record.id] = cls.get_source(name, ttype, lang)
-                if translations[record.id] is None:
-                    with Transaction().set_context(language=lang):
-                        if ttype in {'field', 'help'}:
-                            try:
-                                field = getattr(
-                                    pool.get(record.model.model), record.name)
-                            except KeyError:
-                                continue
-                            translations[record.id] = ''
-                            if ttype == 'field':
-                                value = field.string
-                            else:
-                                value = field.help
-                        else:
-                            try:
-                                model = pool.get(record.model)
-                            except KeyError:
-                                continue
-                            if not model.__doc__:
-                                continue
-                            value = model._get_name()
-                        if isinstance(value, StringPartitioned):
-                            for source in value:
-                                translations[record.id] += source
-                        else:
-                            translations[record.id] = value
             return translations
 
         # Don't use cache for fuzzy translation
@@ -436,34 +413,32 @@ class Translation(ModelSQL, ModelView):
                     return record.model + ',' + field_name
 
             with Transaction().set_context(_check_access=False):
-                name2translations = defaultdict(list)
+                translations = {}
                 for translation in cls.search([
                             ('lang', '=', lang),
                             ('type', '=', ttype),
                             ('name', 'in', [get_name(r) for r in records]),
                             ]):
-                    name2translations[translation.name].append(translation)
+                    translations[translation.name] = translation
 
                 to_save = []
                 for record, value in zip(records, values):
-                    translations = name2translations.get(get_name(record))
+                    translation = translations.get(get_name(record))
                     if lang == 'en':
                         src = value
                     else:
                         src = getattr(record, field_name)
-                    if not translations:
+                    if not translation:
                         if not src and not value:
                             continue
                         translation = cls()
                         translation.name = name
                         translation.lang = lang
                         translation.type = ttype
-                        translations.append(translation)
-                    for translation in translations:
-                        translation.src = src
-                        translation.value = value
-                        translation.fuzzy = False
-                        to_save.append(translation)
+                    translation.src = src
+                    translation.value = value
+                    translation.fuzzy = False
+                    to_save.append(translation)
                 cls.save(to_save)
             return
 
@@ -471,8 +446,7 @@ class Translation(ModelSQL, ModelView):
         with Transaction().set_context(language=Config.get_language()):
             records = Model.browse(ids)
 
-        id2translations = defaultdict(list)
-        other_translations = defaultdict(list)
+        translations = {}
         with Transaction().set_context(_check_access=False):
             for translation in cls.search([
                         ('lang', '=', lang),
@@ -480,8 +454,9 @@ class Translation(ModelSQL, ModelView):
                         ('name', '=', name),
                         ('res_id', 'in', ids),
                         ]):
-                id2translations[translation.res_id].append(translation)
+                translations[translation.res_id] = translation
 
+            other_translations = {}
             if (lang == Config.get_language()
                     and Transaction().context.get('fuzzy_translation', True)):
                 for translation in cls.search([
@@ -490,16 +465,17 @@ class Translation(ModelSQL, ModelView):
                             ('name', '=', name),
                             ('res_id', 'in', ids),
                             ]):
-                    other_translations[translation.res_id].append(translation)
+                    other_translations.setdefault(translation.res_id, []
+                        ).append(translation)
 
             to_save = []
             for record, value in zip(records, values):
-                translations = id2translations[record.id]
+                translation = translations.get(record.id)
                 if lang == Config.get_language():
                     src = value
                 else:
                     src = getattr(record, field_name)
-                if not translations:
+                if not translation:
                     if not src and not value:
                         continue
                     translation = cls()
@@ -507,19 +483,17 @@ class Translation(ModelSQL, ModelView):
                     translation.lang = lang
                     translation.type = ttype
                     translation.res_id = record.id
-                    translations.append(translation)
                 else:
-                    other_langs = other_translations[record.id]
+                    other_langs = other_translations.get(record.id)
                     if other_langs:
                         for other_lang in other_langs:
                             other_lang.src = src
                             other_lang.fuzzy = True
                             to_save.append(other_lang)
-                for translation in translations:
-                    translation.value = value
-                    translation.src = src
-                    translation.fuzzy = False
-                    to_save.append(translation)
+                translation.value = value
+                translation.src = src
+                translation.fuzzy = False
+                to_save.append(translation)
             cls.save(to_save)
 
     @classmethod
@@ -727,6 +701,9 @@ class Translation(ModelSQL, ModelView):
 
         def override_translation(ressource_id, new_translation):
             res_id_module, res_id = ressource_id.split('.')
+            # AKE: logging for debug
+            logger.debug('Overriding translation of %s (%s)' % (res_id_module,
+                    new_translation.name))
             if res_id:
                 model_data, = ModelData.search([
                         ('module', '=', res_id_module),
@@ -746,8 +723,19 @@ class Translation(ModelSQL, ModelView):
                 if new_translation.type in {
                         'report', 'view', 'wizard_button', 'selection'}:
                     domain.append(('src', '=', new_translation.src))
-                translation, = cls.search(domain)
-                if translation.value != new_translation.value:
+                # AKE: avoir crash when no transalation
+                found = cls.search(domain)
+                if found:
+                    translation, = found
+                else:
+                    translation = None
+                    logger.warning('Impossible to find translation %s'
+                        ' from module %s for lang %s' % (
+                            new_translation.name,
+                            res_id_module,
+                            new_translation.lang,
+                            ))
+                if translation and translation.value != new_translation.value:
                     translation.value = new_translation.value
                     translation.overriding_module = module
                     translation.fuzzy = new_translation.fuzzy
@@ -818,7 +806,14 @@ class Translation(ModelSQL, ModelView):
                                 to_save.append(old_translation)
                             else:
                                 translations.add(old_translation)
-        cls.save([_f for _f in to_save if _f])
+        # JCA : Add try catch to help with debugging
+        try:
+            cls.save([_f for _f in to_save if _f])
+        except:
+            logger.debug('Failed to save translations')
+            for data in to_save:
+                logging.getLogger().debug('    ' + str(data._save_values))
+            raise
         translations |= set(to_save)
 
         if translations:

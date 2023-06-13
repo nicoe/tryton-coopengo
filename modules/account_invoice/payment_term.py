@@ -31,19 +31,6 @@ class PaymentTerm(DeactivableMixin, ModelSQL, ModelView):
         super(PaymentTerm, cls).__setup__()
         cls._order.insert(0, ('name', 'ASC'))
 
-    @classmethod
-    def validate(cls, terms):
-        super(PaymentTerm, cls).validate(terms)
-        for term in terms:
-            term.check_remainder()
-
-    def check_remainder(self):
-        if not self.lines or not self.lines[-1].type == 'remainder':
-            raise PaymentTermValidationError(
-                gettext('account_invoice'
-                    '.msg_payment_term_missing_last_remainder',
-                    payment_term=self.rec_name))
-
     def compute(self, amount, currency, date=None):
         """Calculate payment terms and return a list of tuples
         with (date, amount) for each payment term line.
@@ -78,9 +65,7 @@ class PaymentTerm(DeactivableMixin, ModelSQL, ModelView):
                 res.append((date, Decimal(0)))
 
         if not currency.is_zero(remainder):
-            raise PaymentTermComputeError(
-                gettext('account_invoice.msg_payment_term_missing_remainder',
-                    payment_term=self.rec_name))
+            res.append((date, remainder))
         return res
 
 
@@ -257,6 +242,7 @@ class PaymentTermLineRelativeDelta(sequence_ordered(), ModelSQL, ModelView):
         line = Line.__table__()
         month = Month.__table__()
         day = Day.__table__()
+        table_h = cls.__table_handler__(module_name)
 
         # Migration from 4.0: rename long table
         old_model_name = 'account.invoice.payment_term.line.relativedelta'
@@ -267,19 +253,12 @@ class PaymentTermLineRelativeDelta(sequence_ordered(), ModelSQL, ModelView):
 
         # Migration from 5.0: use ir.calendar
         migrate_calendar = False
-        if backend.TableHandler.table_exist(cls._table):
-            cursor.execute(*sql_table.select(
-                    sql_table.month, sql_table.weekday,
-                    where=(sql_table.month != Null)
-                    | (sql_table.weekday != Null),
-                    limit=1))
-            try:
-                row, = cursor.fetchall()
-                migrate_calendar = any(isinstance(v, str) for v in row)
-            except ValueError:
-                # As we cannot know the column type
-                # we migrate any way as no data need to be migrated
-                migrate_calendar = True
+        if (backend.TableHandler.table_exist(cls._table)
+                and table_h.column_exist('month')
+                and table_h.column_exist('weekday')):
+            migrate_calendar = (
+                table_h.column_is_type('month', 'VARCHAR')
+                or table_h.column_is_type('weekday', 'VARCHAR'))
             if migrate_calendar:
                 table_h = cls.__table_handler__(module_name)
                 table_h.column_rename('month', '_temp_month')

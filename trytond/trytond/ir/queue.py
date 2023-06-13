@@ -82,28 +82,26 @@ class Queue(ModelSQL):
     def pull(cls, database, connection, name=None):
         cursor = connection.cursor()
         queue = cls.__table__()
-        queue_c = cls.__table__()
-        queue_s = cls.__table__()
 
         candidates = With('id', 'scheduled_at', 'expected_at',
-            query=queue_c.select(
-                queue_c.id,
-                queue_c.scheduled_at,
-                queue_c.expected_at,
-                where=((queue_c.name == name) if name else Literal(True))
-                & (queue_c.dequeued_at == Null),
+            query=queue.select(
+                queue.id,
+                queue.scheduled_at,
+                queue.expected_at,
+                where=((queue.name == name) if name else Literal(True))
+                & (queue.dequeued_at == Null),
                 order_by=[
-                    queue_c.scheduled_at.nulls_first,
-                    queue_c.expected_at.nulls_first]))
-        selected = queue_s.select(
-            queue_s.id,
-            where=((queue_s.name == name) if name else Literal(True))
-            & (queue_s.dequeued_at == Null)
-            & ((queue_s.scheduled_at <= CurrentTimestamp())
-                | (queue_s.scheduled_at == Null)),
+                    queue.scheduled_at.nulls_first,
+                    queue.expected_at.nulls_first]))
+        selected = queue.select(
+            queue.id,
+            where=((queue.name == name) if name else Literal(True))
+            & (queue.dequeued_at == Null)
+            & ((queue.scheduled_at <= CurrentTimestamp())
+                | (queue.scheduled_at == Null)),
             order_by=[
-                queue_s.scheduled_at.nulls_first,
-                queue_s.expected_at.nulls_first],
+                queue.scheduled_at.nulls_first,
+                queue.expected_at.nulls_first],
             limit=1)
         if database.has_select_for():
             For = database.get_select_for_skip_locked()
@@ -201,7 +199,7 @@ class _Method(object):
 
     def __call__(self, instances, *args, **kwargs):
         transaction = Transaction()
-        context = transaction.context.copy()
+        context = transaction.context
         name = context.pop('queue_name', 'default')
         now = datetime.datetime.now()
         scheduled_at = context.pop('queue_scheduled_at', None)

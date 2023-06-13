@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import unittest
-import unittest.mock
 from configparser import ConfigParser
 from functools import reduce
 from functools import wraps
@@ -26,6 +25,8 @@ from trytond.pool import Pool, isregisteredby
 from trytond import backend
 from trytond.model import Workflow, ModelSQL, ModelSingleton, ModelView, fields
 from trytond.model.fields import get_eval_fields, Function
+from trytond.model.fields.selection import TranslatedSelection
+from trytond.model.fields.dict import TranslatedDict
 from trytond.tools import is_instance_method, file_open
 from trytond.transaction import Transaction
 from trytond.cache import Cache
@@ -46,13 +47,13 @@ DB_CACHE = os.environ.get('DB_CACHE')
 Pool.test = True
 
 
-def activate_module(modules, lang='en'):
+def activate_module(modules, lang='en', cache_name=None):
     '''
     Activate modules for the tested database
     '''
     if isinstance(modules, str):
         modules = [modules]
-    name = '-'.join(modules)
+    name = cache_name or '-'.join(modules)
     if lang != 'en':
         name += '--' + lang
     if not db_exist(DB_NAME) and restore_db_cache(name):
@@ -89,7 +90,7 @@ def activate_module(modules, lang='en'):
 def restore_db_cache(name):
     result = False
     if DB_CACHE:
-        cache_file = _db_cache_file(DB_CACHE, name)
+        cache_file = _db_cache_file(DB_CACHE, name, backend.name)
         if os.path.exists(cache_file):
             if backend.name == 'sqlite':
                 result = _sqlite_copy(cache_file, restore=True)
@@ -104,7 +105,7 @@ def backup_db_cache(name):
     if DB_CACHE:
         if not os.path.exists(DB_CACHE):
             os.makedirs(DB_CACHE)
-        cache_file = _db_cache_file(DB_CACHE, name)
+        cache_file = _db_cache_file(DB_CACHE, name, backend.name)
         if not os.path.exists(cache_file):
             if backend.name == 'sqlite':
                 _sqlite_copy(cache_file)
@@ -112,8 +113,8 @@ def backup_db_cache(name):
                 _pg_dump(cache_file)
 
 
-def _db_cache_file(path, name):
-    return os.path.join(path, '%s-%s.dump' % (name, backend.name))
+def _db_cache_file(path, name, backend_name):
+    return os.path.join(path, 'test_%s_cache_%s.dump' % (backend_name, name))
 
 
 def _sqlite_copy(file_, restore=False):
@@ -215,6 +216,7 @@ class ModuleTestCase(unittest.TestCase):
     'Trytond Test Case'
     module = None
     extras = None
+    cache_name = None
 
     @classmethod
     def setUpClass(cls):
@@ -222,7 +224,7 @@ class ModuleTestCase(unittest.TestCase):
         modules = [cls.module]
         if cls.extras:
             modules.extend(cls.extras)
-        activate_module(modules)
+        activate_module(modules, cache_name=cls.cache_name)
         super(ModuleTestCase, cls).setUpClass()
 
     @classmethod
@@ -271,7 +273,12 @@ class ModuleTestCase(unittest.TestCase):
             Model = pool.get(model)
             res = Model.fields_view_get(view_id)
             self.assertEqual(res['model'], model)
-            tree = etree.fromstring(res['arch'])
+
+            try:
+                encoded_arch = res['arch'].encode('utf-8')
+            except UnicodeEncodeError:
+                encoded_arch = res['arch']
+            tree = etree.fromstring(encoded_arch)
 
             validator = etree.RelaxNG(etree=View.get_rng(res['type']))
             validator.assertValid(tree)
@@ -318,7 +325,10 @@ class ModuleTestCase(unittest.TestCase):
                 fields.discard(fname)
                 fields.discard('context')
                 fields.discard('_user')
-                depends = set(field.depends)
+                # XXX PR https://github.com/coopengo/coog/pull/3458 implies
+                # that parent fields are added to depends.
+                depends = set(d for d in field.depends
+                    if not d.startswith('_parent'))
                 self.assertLessEqual(fields, depends,
                     msg='Missing depends %s in "%s"."%s"' % (
                         list(fields - depends), mname, fname))
@@ -412,6 +422,9 @@ class ModuleTestCase(unittest.TestCase):
 
                     # Skip if it is a field
                     if attr in model._fields:
+                        continue
+                    if isinstance(getattr(model, attr), (TranslatedSelection,
+                            TranslatedDict)):
                         continue
                     fnames = [attr[len(prefix):] for prefix in prefixes
                         if attr.startswith(prefix)]
@@ -819,7 +832,6 @@ def doctest_setup(test):
 
 
 def doctest_teardown(test):
-    unittest.mock.patch.stopall()
     return drop_db()
 
 

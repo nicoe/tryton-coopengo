@@ -2,6 +2,7 @@
 # This file is part of Tryton.  The COPYRIGHT file at the top level of
 # this repository contains the full copyright notices and license terms.
 import glob
+import threading
 import logging
 import os
 import sys
@@ -31,26 +32,23 @@ from trytond.pool import Pool
 from trytond.modules import get_module_list, get_module_info
 
 with commandline.pidfile(options):
-    threads = []
-    for name in options.database_names:
-        thread = threading.Thread(target=Pool(name).init)
-        thread.start()
-        threads.append(thread)
-    for thread in threads:
-        thread.join()
+    # Pool.{start,init} are async to avoid slowness on server start
+    # fix #4287
+    def init_pool_db():
+        Pool.start()
+        for name in options.database_names:
+            Pool(name).init()
+    threading.Thread(target=init_pool_db).start()
     hostname, port = split_netloc(config.get('web', 'listen'))
+    static_files = {
+        '/': config.get('web', 'root'),
+        }
+    # AKE: add bench web app
+    bench = config.get('web', 'bench')
+    if bench:
+        static_files['/bench/'] = bench
     certificate = config.get('ssl', 'certificate')
-    try:
-        if config.getboolean('ssl', 'certificate'):
-            certificate = None
-    except ValueError:
-        pass
     privatekey = config.get('ssl', 'privatekey')
-    try:
-        if config.getboolean('ssl', 'privatekey'):
-            privatekey = None
-    except ValueError:
-        pass
     if certificate or privatekey:
         from werkzeug.serving import load_ssl_context
         ssl_args = dict(
@@ -61,6 +59,11 @@ with commandline.pidfile(options):
         info = get_module_info(module)
         path = os.path.join(info['directory'], 'view', '*.xml')
         extra_files.extend(glob.glob(path))
+
+    # AKE: handle term signals
+    handler = commandline.generate_signal_handler(options.pidfile)
+    commandline.handle_signals(handler)
+
 
     if options.coroutine:
         from gevent.pywsgi import WSGIServer
