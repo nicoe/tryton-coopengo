@@ -465,15 +465,18 @@ class Move(ModelSQL, ModelView):
                     move.post_date = Date.today()
                 move.post_number = move.period.post_move_sequence_used.get()
 
+        cls.save(moves)
+
         def keyfunc(line):
             return line.party, line.account
+
         to_reconcile = Line.browse(sorted(
                 [l for l in Line.browse(to_reconcile) if l.account.reconcile],
                 key=keyfunc))
-        for _, lines in groupby(to_reconcile, keyfunc):
-            Line.reconcile(list(lines))
-
-        cls.save(moves)
+        if to_reconcile:
+            reconciliations = [
+                list(x) for _, x in groupby(to_reconcile, keyfunc)]
+            Line.reconcile(*reconciliations)
 
 
 class Reconciliation(ModelSQL, ModelView):
