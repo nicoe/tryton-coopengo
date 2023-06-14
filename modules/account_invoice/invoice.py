@@ -337,59 +337,12 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
 
     @classmethod
     def __register__(cls, module_name):
-        pool = Pool()
-        Line = pool.get('account.invoice.line')
-        Tax = pool.get('account.invoice.tax')
         sql_table = cls.__table__()
-        line = Line.__table__()
-        tax = Tax.__table__()
 
         super(Invoice, cls).__register__(module_name)
         transaction = Transaction()
         cursor = transaction.connection.cursor()
         table = cls.__table_handler__(module_name)
-
-        # Migration from 3.8: remove invoice/credit note type
-        cursor.execute(*sql_table.select(sql_table.id,
-                where=sql_table.type.like('%_invoice')
-                | sql_table.type.like('%_credit_note'),
-                limit=1))
-        if cursor.fetchone():
-            for type_ in ['out', 'in']:
-                cursor.execute(*sql_table.update(
-                        columns=[sql_table.type],
-                        values=[type_],
-                        where=sql_table.type == '%s_invoice' % type_))
-                cursor.execute(*line.update(
-                        columns=[line.invoice_type],
-                        values=[type_],
-                        where=line.invoice_type == '%s_invoice' % type_))
-
-                cursor.execute(*line.update(
-                        columns=[line.quantity, line.invoice_type],
-                        values=[-line.quantity, type_],
-                        where=(line.invoice_type == '%s_credit_note' % type_)
-                        & (line.invoice == Null)
-                        ))
-                # Don't use UPDATE FROM because SQLite nor MySQL support it
-                cursor.execute(*line.update(
-                        columns=[line.quantity, line.invoice_type],
-                        values=[-line.quantity, type_],
-                        where=line.invoice.in_(sql_table.select(sql_table.id,
-                                where=(
-                                    sql_table.type == '%s_credit_note' % type_)
-                                ))))
-                cursor.execute(*tax.update(
-                        columns=[tax.base, tax.amount, tax.base_sign],
-                        values=[-tax.base, -tax.amount, -tax.base_sign],
-                        where=tax.invoice.in_(sql_table.select(sql_table.id,
-                                where=(
-                                    sql_table.type == '%s_credit_note' % type_)
-                                ))))
-                cursor.execute(*sql_table.update(
-                        columns=[sql_table.type],
-                        values=[type_],
-                        where=sql_table.type == '%s_credit_note' % type_))
 
         # Migration from 4.0: Drop not null on payment_term
         table.not_null_action('payment_term', 'remove')
