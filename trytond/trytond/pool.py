@@ -55,6 +55,8 @@ class Pool(object):
     _pool = {}
     test = False
     _instances = {}
+    _init_hooks = {}
+    _post_init_calls = {}
     _modules = None
     pool_types = {'model', 'report', 'wizard'}
 
@@ -104,6 +106,10 @@ class Pool(object):
     def register_mixin(mixin, classinfo, module):
         Pool.classes_mixin[module].append((classinfo, mixin))
 
+    @staticmethod
+    def register_post_init_hooks(*hooks, **kwargs):
+        Pool._init_hooks[kwargs['module']] = hooks
+
     @classmethod
     def start(cls):
         '''
@@ -112,6 +118,7 @@ class Pool(object):
         with cls._lock:
             for classes in Pool.classes.values():
                 classes.clear()
+            cls._init_hooks = {}
             register_classes(with_test=cls.test)
             cls._started = True
 
@@ -170,6 +177,7 @@ class Pool(object):
             # Clean the _pool before loading modules
             for type in self.classes.keys():
                 self._pool[self.database_name][type] = {}
+            self._post_init_calls[self.database_name] = []
             try:
                 restart = not load_modules(
                     self.database_name, self, update=update, lang=lang,
@@ -180,6 +188,13 @@ class Pool(object):
                 raise
             if restart:
                 self.init()
+            self.post_init()
+
+    def post_init(self):
+        for hook in self._post_init_calls[self.database_name]:
+            logging.getLogger('modules').info('Running post init hook %s' %
+                hook.__name__)
+            hook(self)
 
     def get(self, name, type='model'):
         '''
@@ -246,6 +261,8 @@ class Pool(object):
                     f"{cls} is not a subclass of {PoolBase}")
                 self.add(cls, type=type_)
                 classes[type_].append(cls)
+        self._post_init_calls[self.database_name] += self._init_hooks.get(
+            module, [])
         self._modules.append(module)
         return classes
 
