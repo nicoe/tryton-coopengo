@@ -473,7 +473,8 @@ class Move(ModelSQL, ModelView):
                         line.id,
                         where=reduce_ids(line.move, sub_moves_ids)
                         & (line.debit == Decimal(0))
-                        & (line.credit == Decimal(0))))
+                        & (line.credit == Decimal(0))
+                        & (line.reconciliation == Null)))
                 to_reconcile.extend(l for l, in cursor)
 
         for move in moves:
