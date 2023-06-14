@@ -37,6 +37,9 @@ class Date(Widget):
     def real_entry(self):
         return self.entry
 
+    def _color_widget(self):
+        return self.entry
+
     def _set_editable(self, value):
         self.entry.set_editable(value)
         self.entry.set_icon_sensitive(Gtk.EntryIconPosition.PRIMARY, value)
@@ -97,6 +100,9 @@ class Time(Date):
 
     def __init__(self, view, attrs):
         super(Time, self).__init__(view, attrs, _entry=TimeEntry)
+
+    def _color_widget(self):
+        return self.entry.child
 
     def _set_editable(self, value):
         self.entry.set_sensitive(value)
