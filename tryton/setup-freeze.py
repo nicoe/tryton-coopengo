@@ -138,11 +138,11 @@ setup(name='tryton',
     packages=find_packages(),
     options={
         'build_exe': {
-
+            'no_compress': True,
             'include_files': include_files,
             'excludes': ['tkinter'],
             'silent': True,
-            'packages': ['gi'],
+            'packages': ['gi''],
             'includes': ['gi', "gi.overrides.Gtk"],
             'include_msvcr': True,
             'path': sys.path.append("girepository-1.0"),
