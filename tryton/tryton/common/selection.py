@@ -31,9 +31,11 @@ class SelectionMixin(object):
             try:
                 if self.attrs.get('selection_change_with'):
                     selection = RPCExecute('model', self.model_name, selection,
-                        value)
+                        value, process_exception=False)
                 else:
-                    selection = RPCExecute('model', self.model_name, selection)
+                    selection = RPCExecute(
+                        'model', self.model_name, selection,
+                        process_exception=False)
             except RPCException:
                 selection = []
             self._values2selection[key] = selection
