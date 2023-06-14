@@ -150,7 +150,7 @@ setup(name='tryton',
     packages=find_packages(),
     options={
         'build_exe': {
-            'compressed': False,
+            'no_compress': True,
             'include_files': include_files,
             'excludes': ['tkinter'],
             'silent': True,
