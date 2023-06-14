@@ -3042,7 +3042,8 @@ function eval_pyson(value){
                     var params = {};
                     params.model = this.get_model();
                     params.res_id = m2o_id;
-                    params.mode = ['form', 'tree'];
+                    // JMO merge_60 , here we add 'tree' after 'form'
+                    params.mode = ['form'];
                     params.name = this.attributes.string;
                     params.context = this.field.get_context(this.record);
                     Sao.Tab.create(params);
