@@ -67,13 +67,13 @@ os.environ['DB_NAME'] = DB_NAME
 DB_CACHE = os.environ.get('DB_CACHE')
 
 
-def activate_module(modules, lang='en'):
+def activate_module(modules, lang='en', cache_name=None):
     '''
     Activate modules for the tested database
     '''
     if isinstance(modules, str):
         modules = [modules]
-    name = '-'.join(modules)
+    name = cache_name or '-'.join(modules)
     if lang != 'en':
         name += '--' + lang
     if not db_exist(DB_NAME) and restore_db_cache(name):
@@ -251,7 +251,7 @@ class ModuleTestCase(unittest.TestCase):
         modules = [cls.module]
         if cls.extras:
             modules.extend(cls.extras)
-        activate_module(modules, lang=cls.language)
+        activate_module(modules, lang=cls.language, cache_name=cls.module)
         super(ModuleTestCase, cls).setUpClass()
 
     @classmethod
