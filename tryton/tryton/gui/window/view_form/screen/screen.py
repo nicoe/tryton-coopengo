@@ -820,6 +820,8 @@ class Screen:
         if self.parent:
             self.parent.root_parent.reload()
         self.display()
+        if self._multiview_form:
+            self._multiview_form.screen.reload([self.parent.root_parent.id])
 
     def unremove(self):
         records = self.selected_records
@@ -994,7 +996,7 @@ class Screen:
         if set_cursor:
             self.set_cursor()
 
-    def display(self, res_id=None, set_cursor=False):
+    def display(self, res_id=None, set_cursor=False, force=False):
         if res_id:
             self.current_record = self.group.get(res_id)
         else:
@@ -1015,7 +1017,7 @@ class Screen:
                 if (view == self.current_view
                         or view.view_type == 'tree'
                         or view.widget.get_parent()):
-                    view.display()
+                    view.display(force=force)
 
             self.current_view.widget.set_sensitive(
                 bool(self.group
