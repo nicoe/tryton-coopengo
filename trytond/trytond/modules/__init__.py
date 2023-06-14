@@ -217,6 +217,8 @@ def load_module_graph(graph, pool, update=None, lang=None):
 
         idx = 0
         count = len(modules)
+        # JCA : Delay cache clears
+        caches_to_clear = []
         for node in graph:
             module = node.name
             if module not in MODULES:
@@ -285,6 +287,8 @@ def load_module_graph(graph, pool, update=None, lang=None):
 
             # Clear cache from old data cached before transaction started
             Cache.clear_all()
+            # Delay clearing cache to prevent dead lock on ir.cache table
+            caches_to_clear += list(Cache._reset.get(transaction, []))
             # Avoid clearing cache to prevent dead lock on ir.cache table
             Cache.rollback(transaction)
             transaction.commit()
@@ -299,6 +303,8 @@ def load_module_graph(graph, pool, update=None, lang=None):
             Model.clean()
             ModelField = pool.get('ir.model.field')
             ModelField.clean()
+            Cache._reset[transaction] = set(
+                caches_to_clear + list(Cache._reset.get(transaction, [])))
             transaction.commit()
 
         # JCA: Add update parameter to post init hooks
