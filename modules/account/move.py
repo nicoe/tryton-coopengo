@@ -1813,39 +1813,39 @@ class Reconcile(Wizard):
                 having=having))
         return [p for p, in cursor]
 
+    def _next_account(self):
+        accounts = list(self.show.accounts)
+        if not accounts:
+            return
+        account = accounts.pop()
+        self.show.account = account
+        self.show.parties = self.get_parties(account)
+        self.show.accounts = accounts
+        return account
+
+    def _next_party(self):
+        parties = list(self.show.parties)
+        if not parties:
+            return
+        party = parties.pop()
+        self.show.party = party
+        self.show.parties = parties
+        return party
+
     def transition_next_(self):
         pool = Pool()
         Line = pool.get('account.move.line')
 
-        def next_account():
-            accounts = list(self.show.accounts)
-            if not accounts:
-                return
-            account = accounts.pop()
-            self.show.account = account
-            self.show.parties = self.get_parties(account)
-            self.show.accounts = accounts
-            return account
-
-        def next_party():
-            parties = list(self.show.parties)
-            if not parties:
-                return
-            party = parties.pop()
-            self.show.party = party
-            self.show.parties = parties
-            return party,
-
         with Transaction().set_context(_check_access=True):
             if getattr(self.show, 'accounts', None) is None:
                 self.show.accounts = self.get_accounts()
-                if not next_account():
+                if not self._next_account():
                     return 'end'
             if getattr(self.show, 'parties', None) is None:
                 self.show.parties = self.get_parties(self.show.account)
 
-            while not next_party():
-                if not next_account():
+            while not self._next_party():
+                if not self._next_account():
                     return 'end'
             if self.start.automatic or self.start.only_balanced:
                 lines = self._default_lines()
