@@ -129,3 +129,40 @@ class ConfigurationLang(_ConfigurationValue, ModelSQL, ValueMixin):
     __name__ = 'party.configuration.party_lang'
     party_lang = party_lang
     _configuration_value_field = 'party_lang'
+
+    @classmethod
+    def restore_default_party_lang_from_4_2(cls):
+        from trytond.transaction import Transaction
+        from sql import Null, Table, Cast
+        from sql.operators import Concat
+        from trytond.pool import Pool
+
+        if not backend.TableHandler.table_exist('ir_property'):
+            return
+
+        pool = Pool()
+        property = Table('ir_property')
+        Lang = pool.get('ir.lang')
+        field = pool.get('ir.model.field').__table__()
+        lang = Lang.__table__()
+        cursor = Transaction().connection.cursor()
+
+        query_table = property.join(lang, condition=(
+                property.value == Concat('ir.lang,', Cast(lang.id, 'VARCHAR'))
+                )).join(field, condition=((property.field == field.id) &
+                        (field.name == 'lang')))
+
+        cursor.execute(
+            *query_table.select(lang.id, where=property.res == Null))
+        result = cursor.fetchone()
+        if result:
+            result = list(cursor.fetchone())
+            default_lang = Lang(result[0])
+            pool.get('party.configuration.party_lang'
+                ).create([{'party_lang': default_lang}])
+
+    @classmethod
+    def _migrate_property(cls, field_names, value_names, fields):
+        super(ConfigurationLang, cls)._migrate_property(field_names,
+            value_names, fields)
+        cls.restore_default_party_lang_from_4_2()
