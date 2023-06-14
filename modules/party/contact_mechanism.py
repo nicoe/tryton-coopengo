@@ -137,7 +137,8 @@ class ContactMechanism(
                 if address.country:
                     yield address.country.code
 
-    @fields.depends(methods=['_phone_country_codes'])
+    @fields.depends('party', '_parent_party.addresses',
+        methods=['_phone_country_codes'])
     def _parse_phonenumber(self, value):
         for country_code in chain(self._phone_country_codes(), [None]):
             try:
@@ -150,7 +151,8 @@ class ContactMechanism(
                     return phonenumber
         return None
 
-    @fields.depends(methods=['_parse_phonenumber'])
+    @fields.depends('party', '_parent_party.addresses',
+        methods=['_parse_phonenumber'])
     def format_value(self, value=None, type_=None):
         if phonenumbers and type_ in _PHONE_TYPES:
             phonenumber = self._parse_phonenumber(value)
@@ -159,7 +161,8 @@ class ContactMechanism(
                     phonenumber, PhoneNumberFormat.INTERNATIONAL)
         return value
 
-    @fields.depends(methods=['_parse_phonenumber'])
+    @fields.depends('party', '_parent_party.addresses',
+        methods=['_parse_phonenumber'])
     def format_value_compact(self, value=None, type_=None):
         if phonenumbers and type_ in _PHONE_TYPES:
             phonenumber = self._parse_phonenumber(value)
