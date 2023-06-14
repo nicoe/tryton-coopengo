@@ -464,6 +464,17 @@ class Commission(ModelSQL, ModelView):
         Invoice.update_taxes(invoices)
         cls.save(to_save)
 
+    @classmethod
+    def cancel(cls, commissions):
+        cancel_commissions = cls.copy(commissions)
+        for commission in cancel_commissions:
+            commission.update_cancel_copy()
+        cls.save(cancel_commissions)
+        return cancel_commissions
+
+    def update_cancel_copy(self):
+        self.amount *= -1
+
     def _group_to_invoice_key(self):
         direction = {
             'in': 'out',
