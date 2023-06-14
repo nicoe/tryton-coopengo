@@ -2120,6 +2120,7 @@
                     }
                 }
             }
+            // JMO: work around BUG#8720
             if (focus_widget && focus_widget.focus) {
                 focus_widget.focus();
             }
