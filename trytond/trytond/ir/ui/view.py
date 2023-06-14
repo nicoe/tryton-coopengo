@@ -144,7 +144,11 @@ class View(ModelSQL, ModelView):
             if not xml:
                 continue
             try:
-                tree = etree.fromstring(xml)
+                try:
+                    encoded = xml.encode('utf-8')
+                except UnicodeEncodeError:
+                    encoded = xml
+                tree = etree.fromstring(encoded)
             except Exception:
                 # JCA : print faulty xml
                 try:
@@ -262,7 +266,11 @@ class View(ModelSQL, ModelView):
         views.sort(
             key=lambda v: self._module_index.get(v.module, -1), reverse=True)
         parser = etree.XMLParser(remove_comments=True, resolve_entities=False)
-        tree = etree.fromstring(arch, parser=parser)
+        try:
+            encoded_arch = arch.encode('utf-8')
+        except UnicodeEncodeError:
+            encoded_arch = arch
+        tree = etree.fromstring(encoded_arch, parser=parser)
         decoder = PYSONDecoder({'context': Transaction().context})
         for view in views:
             if view.domain and not decoder.decode(view.domain):
