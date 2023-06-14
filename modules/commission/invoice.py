@@ -53,12 +53,16 @@ class Invoice(metaclass=PoolMeta):
     @classmethod
     @Workflow.transition('paid')
     def paid(cls, invoices):
+        super(Invoice, cls).paid(invoices)
+        if invoices:
+            cls._set_paid_commissions_dates(invoices)
+
+    @classmethod
+    def _set_paid_commissions_dates(cls, invoices):
         pool = Pool()
         Date = pool.get('ir.date')
         Commission = pool.get('commission')
         InvoiceLine = pool.get('account.invoice.line')
-
-        super(Invoice, cls).paid(invoices)
 
         date2commissions = defaultdict(list)
         for company, c_invoices in groupby(invoices, key=lambda i: i.company):
