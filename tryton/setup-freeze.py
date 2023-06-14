@@ -29,6 +29,8 @@ include_files = [
         os.path.join('share', 'glib-2.0', 'schemas')),
     (os.path.join(sys.prefix, 'lib', 'gtk-3.0'),
         os.path.join('lib', 'gtk-3.0')),
+    (os.path.join(sys.prefix, 'lib', 'girepository-1.0'),
+        os.path.join('lib', 'girepository-1.0')),
     (os.path.join(sys.prefix, 'lib', 'gdk-pixbuf-2.0'),
         os.path.join('lib', 'gdk-pixbuf-2.0')),
     (os.path.join(sys.prefix, 'lib', 'evince'),
@@ -42,6 +44,10 @@ include_files = [
     (os.path.join(sys.platform, 'gtk-3.0', 'gdk-pixbuf.loaders'),
         os.path.join('etc', 'gtk-3.0', 'gdk-pixbuf.loaders')),
     ]
+
+BIN_DIR = (os.path.join(sys.prefix, 'bin'))
+for dll in [x for x in os.listdir(BIN_DIR) if x.endswith('.dll')]:
+    include_files.append(os.path.join(sys.prefix, 'bin', dll))
 
 required_gi_namespaces = [
     'Atk-1.0',
@@ -132,12 +138,14 @@ setup(name='tryton',
     packages=find_packages(),
     options={
         'build_exe': {
-            'no_compress': True,
+
             'include_files': include_files,
             'excludes': ['tkinter'],
             'silent': True,
             'packages': ['gi'],
+            'includes': ['gi', "gi.overrides.Gtk"],
             'include_msvcr': True,
+            'path': sys.path.append("girepository-1.0"),
             },
         'bdist_mac': {
             'iconfile': os.path.join(
