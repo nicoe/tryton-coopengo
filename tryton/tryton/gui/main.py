@@ -246,6 +246,9 @@ class Main(Gtk.Application):
         self.current_page = 0
         self.last_page = 0
         self.dialogs = []
+        self._global_run = False
+        self._global_check_timeout_id = None
+        self._global_update_timeout_id = None
 
         # Register plugins
         tryton.plugins.register()
@@ -357,6 +360,8 @@ class Main(Gtk.Application):
 
         def update(widget, search_text, callback=None):
             def end():
+                self._global_update_timeout_id = None
+                self._global_run = False
                 if callback:
                     callback()
                 return False
@@ -376,6 +381,8 @@ class Main(Gtk.Application):
                 except RPCException:
                     result = []
                 if search_text != widget.get_text():
+                    self._global_update_timeout_id = None
+                    self._global_run = False
                     if callback:
                         callback()
                     return False
@@ -397,6 +404,7 @@ class Main(Gtk.Application):
                 widget.emit('changed')
                 end()
 
+            self._global_run = True
             RPCExecute('model', 'ir.model', 'global_search', search_text,
                 CONFIG['client.limit'], self.menu_screen.model_name,
                 context=self.menu_screen.context, callback=set_result)
@@ -423,7 +431,7 @@ class Main(Gtk.Application):
 
         def changed(widget):
             search_text = widget.get_text()
-            GLib.timeout_add(300, update, widget, search_text)
+            check_timeout(widget, search_text)
 
         def activate(widget):
             def message():
