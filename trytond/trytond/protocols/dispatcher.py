@@ -17,6 +17,7 @@ from trytond.exceptions import (
     UserError, UserWarning)
 from trytond.rpc import RPCReturnException
 from trytond.tools import is_instance_method
+from trytond.tools.logging import format_args
 from trytond.transaction import Transaction, TransactionError
 from trytond.worker import run_task
 from trytond.wsgi import app
@@ -233,7 +234,7 @@ def _dispatch(request, pool, *args, **kwargs):
         username = username.decode('utf-8')
     log_args = (
         obj.__name__, method,
-        _safe_repr(args, kwargs, not logger.isEnabledFor(logging.DEBUG)),
+        format_args(args, kwargs, logger.isEnabledFor(logging.DEBUG)),
         username, request.remote_addr, request.path)
 
     def duration():
