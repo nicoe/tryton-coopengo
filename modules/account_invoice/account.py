@@ -439,4 +439,5 @@ class RescheduleLines(metaclass=PoolMeta):
         Invoice.write(invoices, {
                 'additional_moves': [('add', [move.id])],
                 })
+        Invoice.process(invoices)
         return move, balance_line
