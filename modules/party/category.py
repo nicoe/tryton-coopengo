@@ -6,6 +6,8 @@ from sql.operators import Equal
 from trytond.model import (
     DeactivableMixin, Exclude, ModelSQL, ModelView, fields, tree)
 
+SEPARATOR = '/'
+
 
 class Category(DeactivableMixin, tree(separator=' / '), ModelSQL, ModelView):
     "Category"
