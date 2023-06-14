@@ -412,10 +412,10 @@ class PartyLang(ModelSQL, ValueMixin):
                         sum([p for p in to_delete.values()], []))))
             for res_model_name, property_ids in to_delete.items():
                 if property_ids:
-                    print '[%s] - %s Inconsistent record(s) removed' % (
-                        res_model_name, len(property_ids))
+                    print('[%s] - %s Inconsistent record(s) removed' % (
+                        res_model_name, len(property_ids)))
         else:
-            print 'Nothing to do - Exisiting property records are clean'
+            print('Nothing to do - Exisiting property records are clean')
 
     @classmethod
     def _migrate_property(cls, field_names, value_names, fields):
