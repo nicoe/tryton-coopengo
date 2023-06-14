@@ -49,7 +49,6 @@ class CommissionTestCase(
         PartyCompanyCheckEraseMixin, CompanyTestMixin, ModuleTestCase):
     'Test Commission module'
     module = 'commission'
-    extras = ['sale']
 
     @with_transaction()
     def test_plan_category(self):
