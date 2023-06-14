@@ -39,3 +39,33 @@ class Category(DeactivableMixin, tree(separator=' / '), ModelSQL, ModelView):
 
         # Migration from 4.6: replace unique by exclude
         table_h.drop_constraint('name_parent_uniq')
+
+    @classmethod
+    def validate(cls, categories):
+        super(Category, cls).validate(categories)
+        cls.check_recursion(categories)
+        for category in categories:
+            category.check_name()
+
+    def check_name(self):
+        if SEPARATOR in self.name:
+            self.raise_user_error('wrong_name', (self.name,))
+
+    def get_rec_name(self, name):
+        if self.parent:
+            return self.parent.get_rec_name(name) + SEPARATOR + self.name
+        return self.name
+
+    @classmethod
+    def search_rec_name(cls, name, clause):
+        if isinstance(clause[2], str):
+            values = clause[2].split(SEPARATOR)
+            values.reverse()
+            domain = []
+            field = 'name'
+            for name in values:
+                domain.append((field, clause[1], name))
+                field = 'parent.' + field
+            return domain
+        # TODO Handle list
+        return [('name',) + tuple(clause[1:])]
