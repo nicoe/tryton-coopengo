@@ -280,9 +280,26 @@ Change account must remove payment::
 
 Validate statement::
 
-    >>> statement.click('validate_statement')
+    >>> statement.click('dummy_validate_method')
     >>> statement.state
     'validated'
+    >>> line ,= statement.lines
+    >>> line.move == None
+    True
+    >>> bank_clearing.reload()
+    >>> bank_clearing.balance
+    Decimal('-50.00')
+    >>> payment.reload()
+    >>> bool(payment.clearing_reconciled)
+    False
+    >>> bool(payment.group.clearing_reconciled)
+    False
+
+ Post statement::
+
+    >>> statement.click('post')
+    >>> statement.state
+    'posted'
     >>> line, = statement.lines
     >>> move_line, = [l for l in line.move.lines
     ...     if l.account == bank_clearing]
@@ -296,6 +313,7 @@ Validate statement::
     True
     >>> bool(payment.group.clearing_reconciled)
     True
+
 
 Unreconcile payment clearing to allow reimbursement::
 
@@ -319,9 +337,13 @@ Create a statement that reimburse the payment group::
     True
     >>> line.amount = Decimal('50.00')
 
-    >>> statement.click('validate_statement')
+    >>> statement.click('dummy_validate_method')
     >>> statement.state
     'validated'
+    >>> line ,= statement.lines
+    >>> line.move == None
+    True
+    >>> statement.click('post')
 
 Payment must be failed::
 
@@ -473,10 +495,14 @@ Create statement for the payment::
 
 Validate statement and check the payment is confirmed::
 
-    >>> statement.click('validate_statement')
+    >>> statement.click('dummy_validate_method')
     >>> statement.state
     'validated'
-    >>> line, = statement.lines
+    >>> line ,= statement.lines
+    >>> line.move == None
+    True
+    >>> statement.click('post')
+    >>> line ,= statement.lines
     >>> move_line, = [l for l in line.move.lines
     ...     if l.account == bank_clearing]
     >>> bool(move_line.reconciliation)
