@@ -1073,6 +1073,14 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
         line.description = self.description
         return line
 
+    def get_payment_term_computation_date(self):
+        pool = Pool()
+        Date = pool.get('ir.date')
+        with Transaction().set_context(company=self.company.id):
+            today = Date.today()
+
+        return self.payment_term_date or self.invoice_date or today
+
     def get_move(self):
         '''
         Compute account move for the invoice and return the created move
@@ -1097,7 +1105,7 @@ class Invoice(Workflow, ModelSQL, ModelView, TaxableMixin):
 
         total = sum(l.debit - l.credit for l in move_lines)
         if self.payment_term:
-            payment_date = self.payment_term_date or self.invoice_date or today
+            payment_date = self.get_payment_term_computation_date()
             term_lines = self.payment_term.compute(
                 total, self.company.currency, payment_date)
         else:
