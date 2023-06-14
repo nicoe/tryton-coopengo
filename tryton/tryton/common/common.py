@@ -1204,6 +1204,8 @@ def RPCContextReload(callback=None):
             rpc.CONTEXT.update(context())
         except RPCException:
             pass
+        if rpc._CLIENT_DATE:
+            rpc.CONTEXT['client_defined_date'] = rpc._CLIENT_DATE
         if callback:
             callback()
     context = RPCExecute(
@@ -1212,6 +1214,8 @@ def RPCContextReload(callback=None):
     if not callback:
         rpc.context_reset()
         rpc.CONTEXT.update(context)
+        if rpc._CLIENT_DATE:
+            rpc.CONTEXT['client_defined_date'] = rpc._CLIENT_DATE
 
 
 class Tooltips(object):
