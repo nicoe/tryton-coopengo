@@ -180,5 +180,9 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks('grunt-contrib-qunit');
     grunt.task.run(['concat', 'jshint', 'less:dev', 'qunit_junit', 'qunit']);
     });
+  grunt.registerTask('copy', 'Copy resources to dist', function() {
+    grunt.loadNpmTasks('grunt-contrib-copy');
+    grunt.task.run(['copy']);
+  });
 
 };
