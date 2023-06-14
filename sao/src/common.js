@@ -2015,7 +2015,8 @@
                 'float': function() {
                     var factor = Number(field.factor || 1);
                     var result = Number(value);
-                    if (isNaN(result) || value === '' || value === null) {
+                    if (isNaN(result) || value === '' ||
+                        value === null || value === undefined) {
                         return null;
                     } else {
                         return result / factor;
@@ -2183,7 +2184,7 @@
                     return Sao.common.timedelta.format(value, converter);
                 },
                 'many2one': function() {
-                    if (value === null) {
+                    if (value === null || value === undefined) {
                         return '';
                     } else {
                         return value;
@@ -2196,7 +2197,7 @@
                 var func = converts[field.type];
                 if (func) {
                     return this.quote(func(value));
-                } else if (value === null) {
+                } else if (value === null || value === undefined) {
                     return '';
                 } else {
                     return this.quote(value);
