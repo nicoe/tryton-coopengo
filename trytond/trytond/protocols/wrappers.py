@@ -20,7 +20,7 @@ from werkzeug.wrappers import Request as _Request
 from werkzeug.wrappers import Response
 
 from trytond import backend, security
-from trytond.config import config
+from trytond.config import config, parse_uri
 from trytond.exceptions import RateLimitException, UserError, UserWarning
 from trytond.pool import Pool
 from trytond.tools import cached_property
@@ -219,6 +219,15 @@ def with_pool(func):
                 raise
             else:
                 abort(HTTPStatus.INTERNAL_SERVER_ERROR, e)
+    return wrapper
+
+
+def with_pool_by_config(func):
+    @wraps(func)
+    def wrapper(request, *args, **kwargs):
+        uri = config.get('database', 'uri')
+        database_name = parse_uri(uri).path[1:]
+        return with_pool(func)(request, database_name, *args, **kwargs)
     return wrapper
 
 
