@@ -375,9 +375,53 @@ class PartyLang(ModelSQL, ValueMixin):
                 cls._migrate_property([], [], [])
 
     @classmethod
+    def clean_properties_from_4_2(cls):
+        from sql import Null, Table, Cast
+        from sql.operators import Like, Concat
+
+        if not backend.TableHandler.table_exist('ir_property'):
+            return
+
+        property = Table('ir_property')
+
+        cursor = Transaction().connection.cursor()
+        cursor.execute(*property.select(property.res,
+                where=property.res != Null))
+
+        res_model_names = list(set([x[0].split(',')[0]
+                for x in cursor.fetchall()]))
+
+        to_delete = {}
+
+        for res_model_name in res_model_names:
+            table_name = res_model_name.replace('.', '_')
+            res_model = Table(table_name)
+            query_table = property.join(res_model, 'LEFT OUTER', condition=(
+                    property.res == Concat(res_model_name + ',',
+                        Cast(res_model.id, 'VARCHAR'))
+                    ))
+            cursor.execute(*query_table.select(property.id,
+                    where=Like(property.res, res_model_name + ',%') &
+                    (res_model.id == Null)))
+            property_ids = [x[0] for x in cursor.fetchall()]
+            if property_ids:
+                to_delete[res_model_name] = property_ids
+        if to_delete:
+            cursor.execute(
+                *property.delete(where=property.id.in_(
+                        sum([p for p in to_delete.values()], []))))
+            for res_model_name, property_ids in to_delete.items():
+                if property_ids:
+                    print '[%s] - %s Inconsistent record(s) removed' % (
+                        res_model_name, len(property_ids))
+        else:
+            print 'Nothing to do - Exisiting property records are clean'
+
+    @classmethod
     def _migrate_property(cls, field_names, value_names, fields):
         field_names.append('lang')
         value_names.append('lang')
+        cls.clean_properties_from_4_2()
         migrate_property(
             'party.party', field_names, cls, value_names,
             parent='party', fields=fields)
