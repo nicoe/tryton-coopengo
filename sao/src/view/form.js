@@ -1539,6 +1539,9 @@ function eval_pyson(value){
                     async: true
                 }
             });
+            this.codeMirror.setOption("extraKeys" ,{
+                "Alt-R": "replace", "Shift-Alt-R": "replaceAll",
+            });
         },
         init_tree: function(width){
             var container = jQuery('<div/>', {
