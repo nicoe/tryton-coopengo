@@ -48,8 +48,7 @@ from threading import Lock
 from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk
 
 from tryton import __version__
-from tryton.exceptions import (
-    TrytonAuthenticationError, TrytonError, TrytonServerError)
+from tryton.exceptions import TrytonError, TrytonServerError
 from tryton.pyson import PYSONEncoder
 
 from .underline import set_underline
