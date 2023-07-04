@@ -121,8 +121,11 @@ class Field(object):
             invalid = 'domain'
         else:
             screen_domain, _ = self.domains_get(record, pre_validate)
-            unique, leftpart, value = unique_value(domain)
-            unique_from_screen, _, _ = unique_value(screen_domain)
+            multi_valued = isinstance(self, (O2MField, MultiSelectionField))
+            unique, leftpart, value = unique_value(
+                domain, multi_valued_field=multi_valued)
+            unique_from_screen, _, _ = unique_value(
+                screen_domain, multi_valued_field=multi_valued)
             if (self._is_empty(record)
                     and not is_required
                     and not is_invisible
