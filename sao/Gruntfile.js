@@ -32,6 +32,7 @@ module.exports = function(grunt) {
       'bower_components/bootstrap',
       'bower_components/bootstrap/less',
       'bower_components/bootstrap-rtl-ondemand/less',
+      'theme/coog',
   ];
 
   // Project configuration.
