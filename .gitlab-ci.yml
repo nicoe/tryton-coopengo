@@ -69,9 +69,11 @@ create:windows:
   before_script:
     - apt update && apt install -y --no-install-recommends git
     - |-
-      if [[ $(git tag --points-at HEAD | wc -l) -ne 1 && ${CI_PIPELINE_SOURCE} != "web" ]]
-      then
-        echo "Last commit doesn't have 1 tag, that mean there is no change"
+      LATEST_TAG=$(git tag --sort version:refname | grep "$(git rev-parse --abbrev-ref HEAD)" | tail -n 1)
+      PREVIOUS_LATEST_TAG=$(git tag --sort version:refname | grep "$(git rev-parse --abbrev-ref HEAD)" | tail -n 2 | head -n 1)
+      GIT_TRYTON_CHECK=$(git diff --diff-filter=AMD --name-only "${PREVIOUS_LATEST_TAG}" "${LATEST_TAG}" -- tryton/)
+      if [[ -z "${GIT_TRYTON_CHECK} && ${CI_PIPELINE_SOURCE} != "web" ]]; then
+        echo "No change for tryton client between ${LATEST_TAG} and ${PREVIOUS_LATEST_TAG}"
         echo "Pipeline stop here"
         exit 1
       fi
@@ -122,8 +124,8 @@ create:windows:
   rules:
     - if: $CI_COMMIT_TAG =~ /^coog-(([[:digit:]]{1,2}).([[:digit:]]{1,2}))/
       changes:
-        - "tryton/*.{py,nsh,nsi,po,cfg}"
-        - "tryton/**/*.{py,nsh,nsi,po,cfg}"
+        - "tryton/*"
+        - "tryton/**/*"
 
 build:tryton_client:
   stage: build
@@ -153,8 +155,8 @@ build:tryton_client:
   rules:
     - if: $CI_COMMIT_TAG =~ /^coog-(([[:digit:]]{1,2}).([[:digit:]]{1,2}))/
       changes:
-        - "tryton/*.{py,nsh,nsi,po,cfg}"
-        - "tryton/**/*.{py,nsh,nsi,po,cfg}"
+        - "tryton/*"
+        - "tryton/**/*"
 
 destroy:windows:
   stage: destroy
@@ -173,6 +175,6 @@ destroy:windows:
   rules:
     - if: $CI_COMMIT_TAG =~ /^coog-(([[:digit:]]{1,2}).([[:digit:]]{1,2}))/
       changes:
-        - "tryton/*.{py,nsh,nsi,po,cfg}"
-        - "tryton/**/*.{py,nsh,nsi,po,cfg}"
+        - "tryton/*"
+        - "tryton/**/*"
       when: always
