@@ -15,6 +15,24 @@ __all__ = ['Date', 'CellRendererDate', 'Time', 'CellRendererTime', 'DateTime']
 _ = gettext.gettext
 
 
+class InvalidDateTime:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance:
+            return cls._instance
+        return super().__new__(cls)
+
+    __gt__ = lambda self, other: False  # noqa: E731
+    __lt__ = lambda self, other: False  # noqa: E731
+    __le__ = lambda self, other: False  # noqa: E731
+    __ge__ = lambda self, other: False  # noqa: E731
+    __eq__ = lambda self, other: False  # noqa: E731
+
+
+INVALID_DT_VALUE = InvalidDateTime()
+
+
 def _fix_format(format_):
     if '%Y' in format_:
         if (datetime.date.min.strftime('%Y') != '0001'
@@ -118,16 +136,21 @@ class Date(Gtk.Entry):
 
     def parse(self):
         text = self.get_text()
-        date = None
+        style_context = self.get_style_context()
         if text:
             try:
-                date = date_parse(text, self.__format).date()
+                self.__date = date_parse(text, self.__format).date()
+                style_context.remove_class('invalid')
             except (ValueError, OverflowError):
-                pass
-
-        self.__date = date
+                self.__date = INVALID_DT_VALUE
+                style_context.add_class('invalid')
+        else:
+            self.__date = None
+            style_context.remove_class('invalid')
 
     def update_label(self):
+        if self.__date is INVALID_DT_VALUE:
+            return
         if not self.__date:
             self.set_text('')
             return
@@ -210,7 +233,7 @@ class Date(Gtk.Entry):
                 self.set_text(value)
                 self.parse()
                 value = self.__date
-            if value:
+            if value and value is not INVALID_DT_VALUE:
                 if isinstance(value, datetime.datetime):
                     value = value.date()
                 assert isinstance(value, datetime.date), value
@@ -334,16 +357,21 @@ class Time(Gtk.ComboBox):
 
     def parse(self):
         text = self.__entry.get_text()
-        time = None
+        style_context = self.get_style_context()
         if text:
             try:
-                time = date_parse(text).time()
+                self.__time = date_parse(text).time()
+                style_context.remove_class('invalid')
             except (ValueError, OverflowError):
-                pass
-
-        self.__time = time
+                self.__time = INVALID_DT_VALUE
+                style_context.add_class('invalid')
+        else:
+            self.__time = None
+            style_context.remove_class('invalid')
 
     def update_label(self):
+        if self.__time is INVALID_DT_VALUE:
+            return
         if self.__time is None:
             self.__entry.set_text('')
             return
@@ -383,7 +411,7 @@ class Time(Gtk.ComboBox):
                 self.__entry.set_text(value)
                 self.parse()
                 value = self.__time
-            if value:
+            if value and value is not INVALID_DT_VALUE:
                 if isinstance(value, datetime.datetime):
                     value = value.time()
             self.__time = value
@@ -517,7 +545,9 @@ class DateTime(Gtk.HBox):
         if prop.name == 'value':
             date = self.__date.props.value
             time = self.__time.props.value or datetime.time()
-            if date:
+            if (date is INVALID_DT_VALUE or time is INVALID_DT_VALUE):
+                return INVALID_DT_VALUE
+            elif date:
                 return datetime.datetime.combine(date, time)
             else:
                 return

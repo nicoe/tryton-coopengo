@@ -1810,6 +1810,17 @@
         date_format: function(record) {
             var context = this.get_context(record);
             return Sao.common.date_format(context.date_format);
+        },
+        validate: function(record, softvalidation, pre_validate) {
+            var valid = Sao.field.DateTime._super.validate.call(
+                this, record, softvalidation, pre_validate);
+            var state_attrs = this.get_state_attrs(record);
+            var value = this.get(record);
+            if (value && !value.isValid()) {
+                state_attrs.invalid = 'value';
+                valid = false;
+            }
+            return valid;
         }
     });
 
@@ -1826,6 +1837,17 @@
         date_format: function(record) {
             var context = this.get_context(record);
             return Sao.common.date_format(context.date_format);
+        },
+        validate: function(record, softvalidation, pre_validate) {
+            var valid = Sao.field.DateTime._super.validate.call(
+                this, record, softvalidation, pre_validate);
+            var state_attrs = this.get_state_attrs(record);
+            var value = this.get(record);
+            if (value && !value.isValid()) {
+                state_attrs.invalid = 'value';
+                valid = false;
+            }
+            return valid;
         }
     });
 
@@ -1841,6 +1863,17 @@
             }
             Sao.field.Time._super.set_client.call(this, record, value,
                 force_change);
+        },
+        validate: function(record, softvalidation, pre_validate) {
+            var valid = Sao.field.Time._super.validate.call(
+                this, record, softvalidation, pre_validate);
+            var state_attrs = this.get_state_attrs(record);
+            var value = this.get(record);
+            if (value && !value.isValid()) {
+                state_attrs.invalid = 'value';
+                valid = false;
+            }
+            return valid;
         }
     });
 

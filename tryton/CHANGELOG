@@ -1,3 +1,5 @@
+* Don't reset date/datetime/time to None when it is invalid
+
 Version 6.4.6 - 2022-11-17
 --------------------------
 * Bug fixes (see mercurial logs for details)

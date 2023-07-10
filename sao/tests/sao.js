@@ -1659,6 +1659,28 @@
                 JSON.stringify(value) + ', ' + JSON.stringify(context) + ')');
         };
 
+        var test_moment_func = function(test) {
+            var value = test[0];
+            var result = test[1];
+
+            var compare = function(d1, d2) {
+                if ((d1 && d1.isValid()) && (d2 && d2.isValid())) {
+                    return d1.valueOf() === d2.valueOf();
+                } else if ((d1 && !d1.isValid()) && (d2 && !d2.isValid())) {
+                    return d1.invalid_value === d2.invalid_value;
+                } else if (!d1 && !d2) {
+                    return d1 === d2;
+                } else {
+                    return false;
+                }
+            };
+
+            QUnit.ok(compare(
+                parser.convert_value(this, value, context), result),
+                'convert_value(' + JSON.stringify(this)+ ', ' +
+                    JSON.stringify(value)+ ', ' + JSON.stringify(context) + ')');
+        };
+
         var field = {
             'type': 'boolean'
         };
@@ -1757,22 +1779,27 @@
         [
         ['2002-12-04', Sao.DateTime(2002, 11, 4)],
         ['2002-12-04 12:30:00', Sao.DateTime(2002, 11, 4, 12, 30)]
-        ].forEach(test_valueOf_func, field);
+        ].forEach(test_moment_func, field);
         [
-        ['test', null],
+        ['test', Sao.DateTime(
+            undefined, undefined, undefined,
+            undefined, undefined, undefined, undefined, false,
+            false, 'test')],
         [null, null]
-        ].forEach(test_func, field);
+        ].forEach(test_moment_func, field);
 
         field = {
             'type': 'date'
         };
         [
         ['2002-12-04', Sao.Date(2002, 11, 4)]
-        ].forEach(test_valueOf_func, field);
+        ].forEach(test_moment_func, field);
         [
-        ['test', null],
+        ['test', Sao.Date(
+            undefined, undefined, undefined,
+            false, 'test')],
         [null, null]
-        ].forEach(test_func, field);
+        ].forEach(test_moment_func, field);
 
         field = {
             'type': 'time',
@@ -1780,11 +1807,11 @@
         };
         [
         ['12:30:00', Sao.Time(12, 30, 0)],
-        ['test', Sao.Time(0, 0, 0)]
-        ].forEach(test_valueOf_func, field);
+        ['test', Sao.Time(undefined, undefined, undefined, undefined, 'test')]
+        ].forEach(test_moment_func, field);
         [
         [null, null]
-        ].forEach(test_func, field);
+        ].forEach(test_moment_func, field);
 
         field = {
             'type': 'timedelta'
