@@ -1789,6 +1789,13 @@
         time_format: function(record) {
             return record.expr_eval(this.description.format);
         },
+        get_eval: function() {
+            var value = Sao.field.DateTime._super.get_eval.call(this);
+            if (!value.isValid()) {
+                value = null;
+            }
+            return value;
+        },
         set_client: function(record, value, force_change) {
             var current_value;
             if (value) {
@@ -1826,6 +1833,13 @@
 
     Sao.field.Date = Sao.class_(Sao.field.Field, {
         _default: null,
+        get_eval: function() {
+            var value = Sao.field.DateTime._super.get_eval.call(this);
+            if (!value.isValid()) {
+                value = null;
+            }
+            return value;
+        },
         set_client: function(record, value, force_change) {
             if (value && !value.isDate) {
                 value.isDate = true;
@@ -1855,6 +1869,13 @@
         _default: null,
         time_format: function(record) {
             return record.expr_eval(this.description.format);
+        },
+        get_eval: function() {
+            var value = Sao.field.DateTime._super.get_eval.call(this);
+            if (!value.isValid()) {
+                value = null;
+            }
+            return value;
         },
         set_client: function(record, value, force_change) {
             if (value && (value.isDate || value.isDateTime)) {
