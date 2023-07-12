@@ -728,7 +728,8 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
     def create_records(self, model, vlist, fs_ids):
         Model = self.pool.get(model)
 
-        with Transaction().set_context(module=self.module, language='en'):
+        with Transaction().set_context(
+                xml_loading=True, module=self.module, language='en'):
             records = Model.create(vlist)
 
         mdata_values = []

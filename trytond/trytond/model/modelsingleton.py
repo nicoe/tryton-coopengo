@@ -40,7 +40,8 @@ class ModelSingleton(ModelStorage):
         assert len(vlist) == 1
         singleton = cls.get_singleton()
         if not singleton:
-            if issubclass(cls, ModelSQL):
+            if (issubclass(cls, ModelSQL)
+                    and not Transaction().context.get('xml_loading')):
                 cls.lock()
             return super(ModelSingleton, cls).create(vlist)
         cls.write([singleton], vlist[0])
