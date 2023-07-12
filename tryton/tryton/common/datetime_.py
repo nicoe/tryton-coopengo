@@ -57,6 +57,8 @@ def date_parse(text, format_='%x'):
     except ValueError:
         monthfirst = False
     yearfirst = not dayfirst and not monthfirst
+    if len(text) == 8 and dayfirst:
+        return datetime.datetime.strptime(text, '%Y%m%d').date()
     return parse(text, dayfirst=dayfirst, yearfirst=yearfirst, ignoretz=True)
 
 
