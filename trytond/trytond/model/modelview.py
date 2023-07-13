@@ -818,7 +818,13 @@ class ModelView(Model):
                         value = value.id
             elif field._type in {'one2many', 'many2many'}:
                 if isinstance(value, (list, tuple)):
-                    value = [int(r) for r in value]
+                    new_value = []
+                    for v in value:
+                        if isinstance(v, dict):
+                            new_value.append(v)
+                        else:
+                            new_value.append(int(v))
+                    value = new_value
             changes[fieldname] = value
         return changes
 
