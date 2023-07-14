@@ -285,13 +285,14 @@ def load_module_graph(graph, pool, update=None, lang=None):
                                 ]))
                 module2state[module] = 'activated'
 
-            # Clear cache from old data cached before transaction started
-            Cache.clear_all()
-            # Delay clearing cache to prevent dead lock on ir.cache table
-            caches_to_clear += list(Cache._reset.get(transaction, []))
-            # Avoid clearing cache to prevent dead lock on ir.cache table
+            # Reset cache changes to prevent dead lock on ir.cache table
             Cache.rollback(transaction)
             transaction.commit()
+            # Clear the cache so that the transaction has an empty cache
+            # from now on. The cache is not empty because the rollback might
+            # have filled it with old data from before the transaction
+            # started.
+            Cache.clear_all()
             # Clear transaction cache to update default_factory
             transaction.cache.clear()
 
@@ -303,8 +304,6 @@ def load_module_graph(graph, pool, update=None, lang=None):
             Model.clean()
             ModelField = pool.get('ir.model.field')
             ModelField.clean()
-            Cache._reset[transaction] = set(
-                caches_to_clear + list(Cache._reset.get(transaction, [])))
             transaction.commit()
 
         # JCA: Add update parameter to post init hooks
