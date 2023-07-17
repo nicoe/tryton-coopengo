@@ -67,7 +67,7 @@ create:windows:
   stage: create
   image: registry.gitlab.com/gitlab-org/cloud-deploy/aws-base:latest
   before_script:
-    - apt update && apt install -y --no-install-recommends git
+    - !reference [.git_with_ssh:debian, before_script]
     - |-
       LATEST_TAG=$(git tag --sort version:refname | grep "$(git rev-parse --abbrev-ref HEAD)" | tail -n 1)
       PREVIOUS_LATEST_TAG=$(git tag --sort version:refname | grep "$(git rev-parse --abbrev-ref HEAD)" | tail -n 2 | head -n 1)
