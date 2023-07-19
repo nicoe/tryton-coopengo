@@ -1207,7 +1207,6 @@ class AccountTestCase(
 
             taxable = self.Taxable(
                 currency=currency,
-                company=company,
                 taxable_lines=[
                     ([tax1, tax2], Decimal('1.0417'), 1, None),
                     ],
@@ -1258,7 +1257,6 @@ class AccountTestCase(
             # -2.95 is the unit price of -3.54 with 20% tax included
             taxable = self.Taxable(
                 currency=currency,
-                company=company,
                 taxable_lines=[
                     ([tax1], Decimal('30.00'), 1, None),
                     ([tax1, tax2], Decimal('-2.95'), 1, None),
