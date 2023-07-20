@@ -69,9 +69,13 @@ create:windows:
   before_script:
     - !reference [.git_with_ssh:debian, before_script]
     - |-
+      set -eux
       LATEST_TAG=$(git log --first-parent --pretty=%d | grep -m2 tag: | grep -Eo 'coog-[0-9]{1,2}.[0-9]{1,2}.[0-9]{4}(.[0-9]+)?' | head -n 1)
+      echo "${LATEST_TAG}"
       PREVIOUS_LATEST_TAG=$(git log --first-parent --pretty=%d | grep -m2 tag: | grep -Eo 'coog-[0-9]{1,2}.[0-9]{1,2}.[0-9]{4}(.[0-9]+)?' | tail -n 1)
+      echo "${PREVIOUS_LATEST_TAG}"
       GIT_TRYTON_CHECK=$(git diff --diff-filter=AMD --name-only "${PREVIOUS_LATEST_TAG}" "${LATEST_TAG}" -- tryton/)
+      echo "${GIT_TRYTON_CHECK}"
       if [[ -z "${GIT_TRYTON_CHECK} && ${CI_PIPELINE_SOURCE} != "web" ]]; then
         echo "No change for tryton client between ${LATEST_TAG} and ${PREVIOUS_LATEST_TAG}"
         echo "Pipeline stop here"
