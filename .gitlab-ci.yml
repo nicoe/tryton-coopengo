@@ -30,7 +30,7 @@ variables:
 
 .aws-cli:assumed-role:
   before_script:
-    - aws sts assume-role --duration-seconds 600 --role-arn "arn:aws:iam::${AWS_ASSUME_ROLE_COOPENGO_INTERNE}:role/gitlab-ci" --role-session-name "${CI_COMMIT_REF_SLUG}_${CI_PIPELINE_ID}-Session" > "${AWS_CLI_ASSUME_ROLE_PATH}"
+    - aws sts assume-role --duration-seconds 900 --role-arn "arn:aws:iam::${AWS_ASSUME_ROLE_COOPENGO_INTERNE}:role/gitlab-ci" --role-session-name "${CI_COMMIT_REF_SLUG}_${CI_PIPELINE_ID}-Session" > "${AWS_CLI_ASSUME_ROLE_PATH}"
     - AWS_ACCESS_KEY_ID=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.AccessKeyId'|tr -d '"')
     - AWS_SECRET_ACCESS_KEY=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}" |jq -c '.Credentials.SecretAccessKey'|tr -d '"')
     - AWS_SESSION_TOKEN=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.SessionToken'|tr -d '"')
