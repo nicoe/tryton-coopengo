@@ -4,6 +4,9 @@ stages:
   - build
   - destroy
 
+variables:
+  AWS_CLI_ASSUME_ROLE_PATH: /tmp/aws-assume-role
+
 ################## extends ##################
 
 .terraform:
@@ -25,6 +28,18 @@ stages:
         -backend-config="retry_wait_min=5"
     - envsubst < "terraform.tfvars.template" > "terraform.tfvars"
 
+.aws-cli:assumed-role:
+  before_script:
+    - aws sts assume-role --duration-seconds 600 --role-arn "arn:aws:iam::${AWS_ASSUME_ROLE_COOPENGO_INTERNE}:role/gitlab-ci" --role-session-name "${CI_COMMIT_REF_SLUG}_${CI_PIPELINE_ID}-Session" > "${AWS_CLI_ASSUME_ROLE_PATH}"
+    - AWS_ACCESS_KEY_ID=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.AccessKeyId'|tr -d '"')
+    - AWS_SECRET_ACCESS_KEY=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}" |jq -c '.Credentials.SecretAccessKey'|tr -d '"')
+    - AWS_SESSION_TOKEN=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.SessionToken'|tr -d '"')
+    - rm -rf "${AWS_CLI_ASSUME_ROLE_PATH}"
+    - aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID} --profile assumed-role
+    - aws configure set aws_secret_access_key $A{WS_SECRET_ACCESS_KEY} --profile assumed-role
+    - aws configure set aws_session_token ${AWS_SESSION_TOKEN} --profile assumed-role
+    - aws sts get-caller-identity --profile assumed-role
+
 ################## Includes ##################
 
 include:
@@ -33,35 +48,6 @@ include:
     file: '/Jobs/reference.debian.gitlab-ci.yml'
 
 ################## Jobs ##################
-
-# synchronize:pipeline:
-#   stage: synchronize
-#   image: bitnami/git:latest
-#   before_script:
-#     - mkdir -p ~/.ssh
-#     - chmod 700 ~/.ssh
-#     - ssh-keyscan -H "${CI_SERVER_HOST}" >>~/.ssh/known_hosts
-#     - cat "${SSH_KEY}" > ~/.ssh/id_rsa
-#     - chmod 400 ~/.ssh/id_rsa
-#     - git config --global user.email "${GITLAB_USER_EMAIL}"
-#     - git config --global user.name "🤖 GitLab CI/CD 🤖"
-#     - git remote set-url origin git@${CI_SERVER_HOST}:${CI_PROJECT_PATH}.git
-#     - git fetch --all
-#   script:
-#     - |-
-#       for BRANCH in $(git ls-remote --refs -h origin -l "coog-*" | cut -s -d '/' -f3 | grep -E "^(coog-[[:digit:]]{1,2}).([[:digit:]]{1,2})$" )
-#       do
-#         git checkout "${BRANCH}"
-#         git checkout "${CI_COMMIT_SHORT_SHA}" .gitlab-ci.yml tryton/sign-client.bat tryton/.gitlab/
-#         git commit -m "Merge .gitlab-ci.yml, sign-client.bat and build directory from \"${CI_COMMIT_SHORT_SHA}\"" || echo "Nothing to do"
-#       done
-#       git push --all
-#   rules:
-#     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_REF_NAME == $CI_DEFAULT_BRANCH'
-#       changes:
-#         - ".gitlab-ci.yml"
-#         - "tryton/.gitlab/**/*"
-#         - "tryton/sign-client.bat"
 
 create:windows:
   stage: create
@@ -80,13 +66,14 @@ create:windows:
         exit 1
       fi
     - !reference [.terraform, before_script]
+    - !reference [.aws-cli:assumed-role, before_script]
   script:
     - terraform plan
     - terraform apply --auto-approve
     - cd "${CI_PROJECT_DIR}"
     - |-
       export EC2_STATE_TRY="1"
-      while [[ $(aws ec2 describe-instances --filters "Name = instance.group-name, Values = tryton-${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}" --query 'Reservations[*].Instances[0].State.Name' --output text) != "running" ]] &&
+      while [[ $(aws ec2 describe-instances --profile assumed-role --filters "Name = instance.group-name, Values = tryton-${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}" --query 'Reservations[*].Instances[0].State.Name' --output text) != "running" ]] &&
             [[ "$EC2_STATE_TRY" -le "10" ]]
       do
         echo "Warning : Must wait 60 second minimum else ssh refuse connection"
@@ -103,7 +90,7 @@ create:windows:
       export INSTANCE_IP_TRY="1"
       while [[ "${INSTANCE_IP}" == "" ]] && [[ "${INSTANCE_IP_TRY}" -le "20" ]]
       do
-        export INSTANCE_IP=$(aws ec2 describe-instances --filters "Name = instance.group-name, Values = tryton-${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}" --query 'Reservations[*].Instances[0].PrivateIpAddress' --output text)
+        export INSTANCE_IP=$(aws ec2 describe-instances --profile assumed-role --filters "Name = instance.group-name, Values = tryton-${CI_COMMIT_REF_NAME}-${CI_PIPELINE_ID}" --query 'Reservations[*].Instances[0].PrivateIpAddress' --output text)
         if [[ "${INSTANCE_IP}" == "" ]]
         then
           echo "INSTANCE_IP variable is empty."
