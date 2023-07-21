@@ -30,14 +30,11 @@ variables:
 
 .aws-cli:assumed-role:
   before_script:
-    - aws sts assume-role --duration-seconds 900 --role-arn "arn:aws:iam::${AWS_ASSUME_ROLE_COOPENGO_INTERNE}:role/gitlab-ci" --role-session-name "${CI_COMMIT_REF_SLUG}_${CI_PIPELINE_ID}-Session" > "${AWS_CLI_ASSUME_ROLE_PATH}"
-    - AWS_ACCESS_KEY_ID=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.AccessKeyId'|tr -d '"')
-    - AWS_SECRET_ACCESS_KEY=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}" |jq -c '.Credentials.SecretAccessKey'|tr -d '"')
-    - AWS_SESSION_TOKEN=$(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.SessionToken'|tr -d '"')
+    - aws sts assume-role --duration-seconds 900 --role-arn "arn:aws:iam::${AWS_ASSUME_ROLE_COOPENGO_INTERNE}:role/gitlab-ci" --role-session-name "tryton-Session" > "${AWS_CLI_ASSUME_ROLE_PATH}"
+    - aws configure set aws_access_key_id $(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.AccessKeyId'|tr -d '"') --profile assumed-role
+    - aws configure set aws_secret_access_key $(cat "${AWS_CLI_ASSUME_ROLE_PATH}" |jq -c '.Credentials.SecretAccessKey'|tr -d '"') --profile assumed-role
+    - aws configure set aws_session_token $(cat "${AWS_CLI_ASSUME_ROLE_PATH}"|jq -c '.Credentials.SessionToken'|tr -d '"') --profile assumed-role
     - rm -rf "${AWS_CLI_ASSUME_ROLE_PATH}"
-    - aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID} --profile assumed-role
-    - aws configure set aws_secret_access_key $A{WS_SECRET_ACCESS_KEY} --profile assumed-role
-    - aws configure set aws_session_token ${AWS_SESSION_TOKEN} --profile assumed-role
     - aws sts get-caller-identity --profile assumed-role
 
 ################## Includes ##################
