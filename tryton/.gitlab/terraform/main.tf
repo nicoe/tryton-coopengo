@@ -65,10 +65,6 @@ module "asg_gitlab_runner_manager" {
     }
   ]
 
-  credit_specification = {
-    cpu_credits = "standard"
-  }
-
   network_interfaces = [
     {
       delete_on_termination       = true
