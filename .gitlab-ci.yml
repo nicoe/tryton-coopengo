@@ -115,9 +115,7 @@ create:windows:
 
 build:tryton_client:
   stage: build
-  image: cooghub/coog-ansible:debian-bullseye
-  variables:
-    ANSIBLE_FORCE_COLOR: "true"
+  image: cooghub/coog-ansible:debian-bookworm
   before_script:
     - ansible --version
     - apt update && apt install --no-install-recommends --no-install-suggests -y git sudo openssh-client nmap
