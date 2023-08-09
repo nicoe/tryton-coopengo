@@ -695,9 +695,9 @@ class Translation(ModelSQL, ModelView):
     @property
     def unique_key(self):
         if self.type in {
-                'report', 'view', 'wizard_button', 'selection'}:
+                'report', 'view', 'wizard_button', 'selection', 'field'}:
             return (self.name, self.res_id, self.type, self.src)
-        elif self.type in ('field', 'model', 'help'):
+        elif self.type in ('model', 'help'):
             return (self.name, self.res_id, self.type)
 
     @classmethod
