@@ -695,9 +695,10 @@ class Translation(ModelSQL, ModelView):
     @property
     def unique_key(self):
         if self.type in {
-                'report', 'view', 'wizard_button', 'selection'}:
+                'report', 'view', 'wizard_button', 'selection',
+                'field', 'help'}:
             return (self.name, self.res_id, self.type, self.src)
-        elif self.type in ('field', 'model', 'help'):
+        elif self.type == 'model':
             return (self.name, self.res_id, self.type)
 
     @classmethod
@@ -852,7 +853,6 @@ class Translation(ModelSQL, ModelView):
                         for translation_id in ids:
                             old_translation = id2translation[translation_id]
                             if not noupdate:
-                                old_translation.src = translation.src
                                 old_translation.value = translation.value
                                 old_translation.fuzzy = translation.fuzzy
                                 to_save.append(old_translation)
